@@ -1,0 +1,16 @@
+# TEMPLATE ONLY. Replace image/build and command with values verified from
+# https://github.com/acyounk28/ha-device-mcp and its current documentation.
+services:
+  mcp:
+    # Prefer a verified ARM64 image or build the upstream project locally.
+    # image: REPLACE_WITH_VERIFIED_ARM64_IMAGE
+    # build: ./ha-device-mcp
+    # command: REPLACE_WITH_UPSTREAM_DOCUMENTED_COMMAND
+    env_file:
+      - .env
+    ports:
+      # Keep service private to the Pi; the host tunnel connects over loopback.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    # Set user: "UID:GID" only if supported and documented by the upstream image.
+    # Do not enable privileged mode. Add only required capabilities/devices.
