@@ -1,0 +1,8 @@
+# Local-managed tunnel example (alternative to the token-based Compose service).
+# Fill in tunnel UUID and credentials-file after `cloudflared tunnel create NAME`.
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /etc/cloudflared/YOUR_TUNNEL_UUID.json
+no-autoupdate: true
+ingress:
+  - service: http://ha-mcp:8000
+  - service: http_status:404
