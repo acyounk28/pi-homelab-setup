@@ -1,133 +1,58 @@
 # Environment setup guide (beginner-friendly)
 
-This guide walks you through finding each value used by this repository's `.env` file. You do not need to understand Docker internals to fill it in; follow the steps, paste the values into the matching lines, and keep the file private.
+This guide explains every value in `.env.example`, where to find it, and how Home Assistant connects to your devices. You do not need a separate hardware/API token for each device when Home Assistant already controls it.
 
-## 1. Create your private `.env` file
+## 1. Create your private `.env`
 
-Open a terminal on the Docker host, change to the `pi-homelab-setup` directory, and run:
-
-```sh
-cp .env.example .env && nano .env
-```
-
-In nano, move with the arrow keys, replace the placeholder after `=`, then save with Ctrl+O, Enter, and exit with Ctrl+X. Do not add spaces around `=`. Keep `.env` out of Git and do not paste it into chats or public issue reports. Restrict its permissions afterward:
+From the `pi-homelab-setup` directory:
 
 ```sh
+cp .env.example .env
+nano .env
 chmod 600 .env
 ```
 
-The names in the left column below must match `.env.example`. A few names in older descriptions differ from this repository's actual variable names: Home Assistant uses `HA_URL` (not `HA_BASE_URL`) and `WINDMILL_ENTITY_ID` (not `WINDMILL_FAN_ENTITY_ID`). Use the exact names shown in `.env.example` unless the application repository has since changed its configuration.
+Replace placeholder values after `=`; do not add spaces around `=`. Save in nano with Ctrl+O, Enter, then Ctrl+X. `.env` contains secrets: never commit it, share it, or paste it into support requests.
 
-## 2. Home Assistant values
+## 2. The one Home Assistant connection
 
-### `HA_URL`
+`HA_URL` is the address of your Home Assistant server reachable from the Docker host, including port 8123. Examples: `http://homeassistant.local:8123` or `http://192.168.1.50:8123` (use your actual address, not the example IP).
 
-Use the address that the Docker host can use to reach Home Assistant, including port `8123`. Common examples are:
+To create `HA_LONG_LIVED_ACCESS_TOKEN`, sign into Home Assistant as the account the service should use, click your profile/name, open Security, find Long-Lived Access Tokens, choose Create Token, name it, and copy it immediately. Paste the complete token into `.env`. Treat it like a password; a dedicated limited-permission HA user is preferable. This single Home Assistant token authorizes this server to communicate with devices HA controls. You do not need to find or enter separate Windmill, Pura, Oasis, or Hatch device hardware tokens for this bridge.
 
-- `http://homeassistant.local:8123`
-- `http://192.168.1.50:8123` (replace with your Home Assistant machine's actual local IP)
+`HA_TIMEOUT_SECONDS` and `HA_VERIFY_SSL` are connection settings; keep the defaults unless you know why they need changing. `MCP_HOST`, `MCP_PORT`, and `MCP_PATH` are server settings; retain defaults. Set a unique, strong `MCP_AUTH_TOKEN` for the MCP endpoint. `MCP_ALLOWED_HOSTS` is a comma-separated hostname allowlist; retain localhost entries and add the public hostname used for HA MCP.
 
-Find the IP from your router's connected-device list or Home Assistant's network/system information. From another device on the same home network, open the address in a browser to check that it reaches Home Assistant. If Docker runs on a different host or network, make sure that host can reach the chosen address. Do not use a made-up IP.
+## 3. Make devices available in Home Assistant
 
-### `HA_LONG_LIVED_ACCESS_TOKEN`
+Home Assistant is the single bridge: first integrate each device into HA, then use the entity HA creates. Integrations and entity availability depend on the device model, firmware, and installation; a device may not expose every control.
 
-1. Sign in to Home Assistant as the user account the integration should use.
-2. Open your user profile by selecting your name/profile in the lower-left corner.
-3. Scroll to the bottom of the profile page, or open Profile → Security.
-4. Under Long-Lived Access Tokens, choose Create Token, enter a recognizable name, and confirm.
-5. Copy the token immediately and paste it as the value for `HA_LONG_LIVED_ACCESS_TOKEN`. Home Assistant may not show it again.
+- Windmill fan: pair/add it to Home Assistant through a compatible route such as HomeKit Device/Controller, Local Tuya or the Tuya integration, or a smart plug (which provides plug power control, not fan speed controls). After setup, look in Developer Tools -> States for an entity, often `fan.windmill_ac` or `fan.bedroom_fan`; the actual ID may differ. Important: the current `ha-device-mcp` configuration does not define or consume `WINDMILL_FAN_ENTITY_ID` or `WINDMILL_ENTITY_ID` and does not provide Windmill fan tools. Do not add either variable expecting this MCP server to control it. A future/application change is needed to support Windmill here.
+- Pura: add the Pura Home Assistant integration (for example the `ha-pura` custom integration) and complete its setup. It can expose entities such as `light.<device>_nightlight` and `select.<device>_fragrance` / `select.<device>_intensity`. Pura's fragrance controls are not fan entities.
+- Oasis: add the supported Oasis Mini integration/custom component (such as `ha-oasis-control`). It can expose a light entity such as `light.oasis_mini_led`.
+- Hatch: add the Hatch integration/custom component (such as `ha_hatch`). Depending on model, it may expose `light.*`, `media_player.*`, optional `switch.*`, and favorite `scene.*` entities.
+- Other routes: a device may be brought into HA via a supported native integration, HomeKit, SmartThings, Tuya, or a compatible custom component. Use only a route that actually supports your model and desired controls. The MCP server can only operate entities/integrations it implements; making an entity visible in HA does not automatically add MCP tools for it.
 
-Treat this token like a password. Do not include quote marks unless required by your editor, and never share it publicly.
+### Find and copy an entity ID
 
-### Device entity IDs
+In Home Assistant, open Developer Tools -> States. Search by device/friendly name. Select the entity and copy its exact entity ID, including its domain (`light.`, `select.`, `media_player.`, `switch.`, or `fan.`). Do not copy the display name or guess. For supported roles, put the ID in the matching optional `.env` setting listed in `.env.example`. The current `ha-device-mcp` supports explicit `OASIS_LIGHT_ENTITY_ID`, `PURA_NIGHTLIGHT_ENTITY_ID`, `PURA_FRAGRANCE_SELECT_ENTITY_ID`, `PURA_INTENSITY_SELECT_ENTITY_ID`, `HATCH_LIGHT_ENTITY_ID`, `HATCH_MEDIA_PLAYER_ENTITY_ID`, and `HATCH_POWER_SWITCH_ENTITY_ID`; it auto-discovers omitted supported roles when exactly one match exists. It does not support Windmill or generic `WINDMILL_*` variables at present.
 
-In Home Assistant, open Developer Tools → States. Search for each device by name and select its entity. Copy the exact entity ID shown (including its domain prefix, such as `fan.` or `switch.`):
+## 4. Create the MCP bearer token
 
-- `WINDMILL_ENTITY_ID` — the Windmill fan entity (often starts with `fan.windmill_`). The requested name `WINDMILL_FAN_ENTITY_ID` is not the key used by this repo's `.env.example`.
-- `PURA_ENTITY_ID` — the Pura entity (often starts with `switch.`).
-- `OASIS_ENTITY_ID` — the Oasis entity (often starts with `switch.`).
+On the Docker host, run `openssl rand -hex 32` and paste the result into `MCP_AUTH_TOKEN`. Keep it private. The HA MCP client uses `Authorization: Bearer <token>` with the actual token replacing the placeholder. Do not reuse the Flaim token.
 
-Paste each exact ID into its matching line. Do not copy a display name or guess the entity ID; the available entity domain depends on how the device is integrated.
+## 5. Flaim credentials
 
-Other Home Assistant entries already in `.env.example`:
+`ESPN_S2` and `SWID` are sensitive ESPN login cookies, not Home Assistant or device tokens. Sign into ESPN fantasy football in a browser, open browser Developer Tools -> Application/Storage -> Cookies -> `espn.com`, and copy the complete values for cookies named `espn_s2` and `SWID` into their matching variables. Keep them secret.
 
-- `HA_TIMEOUT_SECONDS` is the request timeout; the provided default is usually fine.
-- `HA_VERIFY_SSL` should normally remain `true` for HTTPS. Do not disable certificate checking as a workaround without understanding the security impact.
-- `MCP_HOST`, `MCP_PORT`, and `MCP_PATH` are service settings; keep the provided defaults unless you are deliberately changing the deployment.
-- `MCP_ALLOWED_HOSTS` is a comma-separated list of hostnames accepted by the HA service. Keep localhost entries and include the public hostname you configure, such as `ha-mcp.yourdomain.com`.
+For `ESPN_LEAGUE_IDS`, copy the league ID value from the ESPN league URL after `leagueId=`. For `SLEEPER_LEAGUE_IDS`, copy the league ID segment from the Sleeper league URL after `/leagues/`. Use comma-separated IDs for multiple leagues. Set a separate strong `FLAIM_MCP_AUTH_TOKEN`; do not reuse the HA token. Keep the supplied Flaim host and port defaults.
 
-## 3. Flaim (ESPN NFL GM and Sleeper) values
+## 6. Cloudflare Tunnel
 
-### `ESPN_S2` and `SWID`
+In Cloudflare Zero Trust, open Networks -> Tunnels, select/create a tunnel and choose Docker/Linux setup. Copy only the token from the command's `--token` argument into `TUNNEL_TOKEN`. Treat it as a secret. Add public routes for `ha-mcp.yourdomain.com` to `http://ha-mcp:8000` and `flaim.yourdomain.com` to `http://flaim-mcp:8001` when cloudflared shares this Compose network. The HA hostname must also be in `MCP_ALLOWED_HOSTS`. Never expose the MCP ports directly to the public internet.
 
-These are ESPN sign-in cookies. Handle them as credentials: anyone who gets them may be able to access your ESPN fantasy account. Do not send them to anyone or paste them into an issue.
+## 7. Validate and start
 
-1. In Chrome or Safari, sign in to ESPN and open `https://www.espn.com/fantasy/football/`.
-2. Open browser Developer Tools (F12 on many keyboards; on Mac, use the browser's Developer Tools menu or its keyboard shortcut).
-3. Open the Application tab in Chrome, or Storage in Firefox/Safari's Web Inspector.
-4. In the left pane, expand Cookies and select `https://www.espn.com` / `espn.com`.
-5. Find the cookie named `espn_s2` and copy its complete Value into `ESPN_S2`.
-6. Find the cookie named `SWID` and copy its complete Value into `SWID`. Preserve its curly braces, for example `{...}`.
-
-If the cookies are not listed, confirm you are signed in and viewing ESPN's fantasy football site, then refresh the page and inspect the `espn.com` cookie store again. Do not include the cookie-name column in the value.
-
-### `ESPN_LEAGUE_IDS`
-
-Open the ESPN fantasy league in your browser. In its address bar, find `leagueId=XXXXXX`; copy only the digits/value after the equals sign into `ESPN_LEAGUE_IDS`. For more than one league, enter the IDs separated by commas, with no spaces unless the Flaim documentation specifies otherwise.
-
-### `SLEEPER_LEAGUE_IDS`
-
-Open the league in the Sleeper app or website. The league ID appears in a URL like `sleeper.com/leagues/XXXXXX`; copy the segment after `/leagues/`. League Settings may also show league details/ID. For multiple leagues, use comma-separated IDs.
-
-`FLAIM_MCP_AUTH_TOKEN`, `FLAIM_MCP_HOST`, and `FLAIM_MCP_PORT` are separate Flaim service settings. Keep the supplied host/port defaults. Set the Flaim token to a separate strong secret; do not reuse `MCP_AUTH_TOKEN`.
-
-## 4. Generate the Home Assistant MCP bearer token
-
-On the Docker host, run:
-
-```sh
-openssl rand -hex 32
-```
-
-Copy the full output into `MCP_AUTH_TOKEN`. This creates a random 32-byte secret represented as hexadecimal. Keep it private and do not reuse it for the Flaim service.
-
-When adding the HA MCP server in Poke at `https://poke.com/integrations/new`, use the public MCP endpoint and add this custom header:
-
-```text
-Authorization: Bearer <the exact MCP_AUTH_TOKEN value>
-```
-
-Replace the angle-bracket placeholder with the token itself; do not include the angle brackets. The word `Bearer` and the space after it are required. Use the corresponding `FLAIM_MCP_AUTH_TOKEN` for Flaim if its server is configured for bearer auth. Keep each service's token matched to that service; verify the current application documentation if its auth behavior differs.
-
-## 5. Cloudflare Tunnel token and public hostnames
-
-### Find `TUNNEL_TOKEN`
-
-1. Sign in to the Cloudflare Zero Trust dashboard for your account.
-2. Open Networks → Tunnels.
-3. Select an existing tunnel or create one.
-4. Choose the Docker or Linux setup instructions.
-5. Cloudflare displays a command similar to `cloudflared tunnel run --token <TOKEN>`.
-6. Copy only the token after `--token` (not the command text) into `TUNNEL_TOKEN` in `.env`.
-
-The tunnel token grants access to your tunnel. Keep it secret. The exact dashboard labels can vary as Cloudflare updates its interface.
-
-### Add Public Hostnames
-
-In Networks → Tunnels, select the tunnel and open its Public Hostnames / published application routes section. Add these two routes, replacing `yourdomain.com` with a domain managed in your Cloudflare account:
-
-| Hostname | Service type | Service URL |
-| --- | --- | --- |
-| `ha-mcp.yourdomain.com` | HTTP | `ha-mcp:8000` |
-| `flaim.yourdomain.com` | HTTP | `flaim-mcp:8001` |
-
-For Cloudflare's URL field, enter `http://ha-mcp:8000` and `http://flaim-mcp:8001` (the `http://` scheme is required). These Compose service-name origins work when cloudflared runs in the same Compose network, as it does in this repository. If cloudflared runs directly on the Docker host outside that network, use `http://localhost:8000` and `http://localhost:8001` instead. Do not mix the two connection layouts.
-
-The hostname used for HA must also be listed in `MCP_ALLOWED_HOSTS`. Use the same hostname when registering the server in Poke, with `/mcp` appended if that is the configured MCP path, for example `https://ha-mcp.yourdomain.com/mcp`.
-
-## 6. Docker/Compose: what to run
-
-Docker runs the services in containers; Docker Compose reads this repository's `docker-compose.yml` and starts the related containers together. Once `.env` is filled in and the three sibling repositories have been cloned as described in the README, run these commands from the `pi-homelab-setup` directory:
+With the three sibling repositories cloned as described in README.md, run from this repository:
 
 ```sh
 sudo docker compose config
@@ -135,18 +60,4 @@ sudo docker compose up -d --build
 sudo docker compose ps
 ```
 
-The first command checks the Compose configuration. Its output can contain secrets, so do not share it. The second builds and starts services in the background. The third shows whether they are running. To view recent startup logs:
-
-```sh
-sudo docker compose logs --tail=100 ha-mcp flaim-mcp cloudflared
-```
-
-If a command says Docker is not installed, follow Docker's official Debian installation instructions linked in the README. If a hostname does not connect, check the tunnel route, hostname spelling, service/port, and container status before changing security settings. Do not expose the service ports directly to the public internet.
-
-## 7. Final safety check
-
-- `.env` contains real secrets; `.env.example` contains placeholders and is safe to commit.
-- Never commit `.env`, post its contents, or share screenshots showing token/cookie values.
-- Use separate strong tokens for HA MCP and Flaim MCP.
-- If a token or cookie is exposed, revoke/rotate it at the issuing service and update `.env`.
-- Check the application repositories' documentation if a variable name or authentication behavior has changed; the environment variable names in this guide reflect this repository's current `.env.example`.
+`docker compose config` can print secrets; keep its output private. `.env.example` holds placeholders only. If an entity is missing, verify the integration and exact ID in Developer Tools -> States. For Windmill control through this deployment, note that the currently deployed ha-device-mcp application does not implement that device; an environment variable alone cannot add support.
