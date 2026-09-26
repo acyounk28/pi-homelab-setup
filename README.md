@@ -47,14 +47,14 @@ The checked-in Compose configuration uses a standard bridge network: HA maps hos
 
 ## 4. Configure environment and remaining services
 
-Configure the HA URL/token, strong unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS` in `.env`. For Flaim set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_AUTH_TOKEN`. Set `TUNNEL_TOKEN` for the included Cloudflare tunnel service. Never commit or share `.env`; `.env.example` contains placeholders only.
+Configure the HA URL/token, strong unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS` in `.env`. For Flaim set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_AUTH_TOKEN` (24+ characters). Flaim reads all of these from `.env`; no `config/leagues.json` is required, and missing or placeholder ESPN cookies only disable ESPN tools while Sleeper keeps working (see `/health` for provider status). Set `TUNNEL_TOKEN` for the included Cloudflare tunnel service. Never commit or share `.env`; `.env.example` contains placeholders only.
 
 ## 5. Configure Cloudflare Tunnel ingress
 
 Create a Cloudflare Tunnel in Zero Trust and configure public hostnames:
 
 - `ha-mcp.yourdomain.com` -> `http://ha-mcp:8000`
-- `flaim.yourdomain.com` -> `http://flaim-mcp:8001`
+- `flaim.yourdomain.com` -> `http://flaim-mcp:8001` (must match `FLAIM_MCP_PORT`)
 
 These service-name origins work when cloudflared shares the Compose network. Add the HA MCP hostname to `MCP_ALLOWED_HOSTS`. Do not expose Home Assistant port 8123 or MCP ports directly to the public internet.
 
@@ -67,6 +67,7 @@ sudo docker compose config
 sudo docker compose up -d --build
 sudo docker compose ps
 sudo docker compose logs --tail=100 homeassistant ha-mcp flaim-mcp cloudflared
+curl -s http://127.0.0.1:8001/health   # flaim: providers + config warnings
 ```
 
 `docker compose config` may print secrets; keep its output private. Register the MCP endpoints at https://poke.com/integrations/new using `https://ha-mcp.yourdomain.com/mcp` and `https://flaim.yourdomain.com/mcp`, with the matching bearer token. Verify using a harmless read-only operation.

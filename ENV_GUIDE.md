@@ -53,7 +53,7 @@ sudo docker compose up -d --build
 sudo docker compose ps
 ```
 
-`docker compose config` can display secrets; keep its output private. ESPN `ESPN_S2` and `SWID` are sensitive browser cookies from the `espn.com` cookie store. ESPN league IDs come after `leagueId=` in the league URL; Sleeper league IDs are the path segment after `/leagues/`. Keep them private as appropriate.
+`docker compose config` can display secrets; keep its output private. ESPN `ESPN_S2` and `SWID` are sensitive browser cookies from the `espn.com` cookie store. ESPN league IDs come after `leagueId=` in the league URL; Sleeper league IDs are the path segment after `/leagues/`. Keep them private as appropriate. Flaim consumes these variables directly (`SWID`/`ESPN_SWID`, `ESPN_S2`/`espn_s2`, `FLAIM_MCP_AUTH_TOKEN`/`FLAIM_MCP_TOKEN` are all accepted); no `config/leagues.json` is needed. If the ESPN cookies are missing or still placeholders, `flaim-mcp` starts with ESPN disabled and reports `providers.espn: missing-credentials` at `/health`, while Sleeper leagues keep working.
 
 ## 5. Cloudflare and security
 

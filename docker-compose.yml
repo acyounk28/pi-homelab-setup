@@ -35,16 +35,32 @@ services:
     networks:
       - homelab
 
+  # Flaim reads leagues and credentials straight from .env (ESPN_LEAGUE_IDS,
+  # SLEEPER_LEAGUE_IDS, SWID, ESPN_S2, FLAIM_MCP_AUTH_TOKEN); no config/leagues.json
+  # is required. The image listens on FLAIM_MCP_PORT (default 8001 here) and
+  # serves Streamable HTTP/SSE at /mcp, health at /health.
   flaim-mcp:
     build:
       context: ../flaim
     env_file:
       - .env
+    environment:
+      FLAIM_MCP_HOST: ${FLAIM_MCP_HOST:-0.0.0.0}
+      FLAIM_MCP_PORT: ${FLAIM_MCP_PORT:-8001}
     ports:
-      - "127.0.0.1:8001:8001"
-    user: "10001:10001"
+      - "127.0.0.1:${FLAIM_MCP_PORT:-8001}:${FLAIM_MCP_PORT:-8001}"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${FLAIM_MCP_PORT:-8001}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     read_only: true
+    # Writable scratch for the player cache; the image runs as the unprivileged
+    # `node` user and falls back to in-memory caching if this is missing.
+    tmpfs:
+      - /data:mode=1777
     cap_drop:
       - ALL
     security_opt:
@@ -60,6 +76,8 @@ services:
     depends_on:
       ha-mcp:
         condition: service_healthy
+      flaim-mcp:
+        condition: service_started
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
