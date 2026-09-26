@@ -211,4 +211,8 @@ curl -s http://127.0.0.1:8002/readyz   # citibike: station count once feeds load
 
 Keep unique strong tokens, restrict Home Assistant account permissions, keep secrets out of Git, and do not configure public router port forwarding. HA data is persisted in `./config/homeassistant` (`HA_CONFIG_DIR`); back it up securely. Check Compose status/logs, HA startup, exact entity IDs, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
 
+- `421 Misdirected Request` from `ha-mcp` / `citibike-mcp`: `MCP_ALLOWED_HOSTS` / `CITIBIKE_MCP_ALLOWED_HOSTS` must contain the exact public hostname. `ha-mcp` and `citibike-mcp` both serve `/mcp` and both check the `Host` header, so they need separate hostnames.
+- `401 unauthorized`: the matching MCP bearer token (`MCP_AUTH_TOKEN` / `FLAIM_MCP_TOKEN` / `CITIBIKE_MCP_TOKEN`), not the Home Assistant token.
+- `citibike-mcp` unhealthy / `/readyz` 503: it could not fetch `GBFS_URL` yet or the last `GBFS_MAX_STALE_POLLS` polls failed (check outbound HTTPS/DNS from the Pi; `docker compose logs citibike-mcp` shows the failing feed URL). `cloudflared` waits for `ha-mcp` and `citibike-mcp` to report healthy before starting.
+
 References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://github.com/acyounk28/citibike-lookup , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
