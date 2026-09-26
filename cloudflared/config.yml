@@ -6,7 +6,8 @@ no-autoupdate: true
 ingress:
   - hostname: ha-mcp.yourdomain.com
     service: http://ha-mcp:8000
-  # Must match FLAIM_MCP_PORT in .env (default 8001).
   - hostname: flaim.yourdomain.com
-    service: http://flaim-mcp:8001
+    service: http://flaim-mcp:8790
+  - hostname: bike.yourdomain.com
+    service: http://citibike-mcp:8002
   - service: http_status:404

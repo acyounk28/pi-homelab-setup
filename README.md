@@ -1,6 +1,6 @@
 # Raspberry Pi Home Lab MCP services
 
-Deploy Home Assistant, Home Assistant `ha-device-mcp`, and fantasy-sports `flaim-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose the MCP services through a Cloudflare Tunnel. The included Home Assistant setup uses a Compose bridge network and persistent `./ha-config` storage.
+Deploy Home Assistant, Home Assistant `ha-device-mcp`, fantasy-sports `flaim-mcp`, and Citi Bike `citibike-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose the MCP services through a Cloudflare Tunnel. The included Home Assistant setup uses a Compose bridge network and persistent `./ha-config` storage.
 
 ## 1. Prepare the host
 
@@ -13,13 +13,14 @@ sudo docker compose version
 
 ## 2. Clone the repositories as siblings
 
-The Compose file builds from `../ha-device-mcp` and `../flaim`; keep all three repositories next to each other:
+The Compose file builds from `../ha-device-mcp`, `../flaim`, and `../citibike-lookup` (plain sibling clones, not git submodules); keep all four repositories next to each other. Each service repo keeps its own runtime state out of git (Flaim's optional `config/leagues.json`, `.env` files), so `git pull` in any of them is conflict-free:
 
 ```sh
 mkdir -p ~/services && cd ~/services
 git clone https://github.com/acyounk28/pi-homelab-setup.git
 git clone https://github.com/acyounk28/ha-device-mcp.git
 git clone https://github.com/acyounk28/flaim.git
+git clone https://github.com/acyounk28/citibike-lookup.git
 cd pi-homelab-setup
 ```
 
@@ -47,14 +48,25 @@ The checked-in Compose configuration uses a standard bridge network: HA maps hos
 
 ## 4. Configure environment and remaining services
 
-Configure the HA URL/token, strong unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS` in `.env`. For Flaim set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_AUTH_TOKEN` (24+ characters). Flaim reads all of these from `.env`; no `config/leagues.json` is required, and missing or placeholder ESPN cookies only disable ESPN tools while Sleeper keeps working (see `/health` for provider status). Set `TUNNEL_TOKEN` for the included Cloudflare tunnel service. Never commit or share `.env`; `.env.example` contains placeholders only.
+Configure the HA URL/token, strong unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS` in `.env`. For Flaim set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_TOKEN` (24+ characters). Flaim reads all of these from `.env`; no `config/leagues.json` is required, and missing or placeholder ESPN cookies only disable ESPN tools while Sleeper keeps working (see `/health` for provider status). Set `TUNNEL_TOKEN` for the included Cloudflare tunnel service. For Citi Bike set `CITIBIKE_MCP_TOKEN` (falls back to `MCP_AUTH_TOKEN` if unset). Never commit or share `.env`; `.env.example` contains placeholders only.
+
+Service contract (container DNS name, port, endpoints):
+
+| Service | Origin | MCP endpoint | Health | Bearer token |
+| --- | --- | --- | --- | --- |
+| `ha-mcp` | `http://ha-mcp:8000` | `/mcp` | `/healthz` | `MCP_AUTH_TOKEN` |
+| `flaim-mcp` | `http://flaim-mcp:8790` | `/mcp` (Streamable HTTP/SSE) | `/health` | `FLAIM_MCP_TOKEN` |
+| `citibike-mcp` | `http://citibike-mcp:8002` | `/mcp` | `/readyz`, `/healthz` | `CITIBIKE_MCP_TOKEN` |
+
+Ports are pinned in `docker-compose.yml` (not taken from `.env`) so they always match the tunnel origins. Host bindings are loopback-only (`127.0.0.1:<port>`).
 
 ## 5. Configure Cloudflare Tunnel ingress
 
 Create a Cloudflare Tunnel in Zero Trust and configure public hostnames:
 
 - `ha-mcp.yourdomain.com` -> `http://ha-mcp:8000`
-- `flaim.yourdomain.com` -> `http://flaim-mcp:8001` (must match `FLAIM_MCP_PORT`)
+- `flaim.yourdomain.com` -> `http://flaim-mcp:8790`
+- `bike.yourdomain.com` -> `http://citibike-mcp:8002`
 
 These service-name origins work when cloudflared shares the Compose network. Add the HA MCP hostname to `MCP_ALLOWED_HOSTS`. Do not expose Home Assistant port 8123 or MCP ports directly to the public internet.
 
@@ -66,14 +78,16 @@ After Home Assistant first-run setup and environment configuration, run from thi
 sudo docker compose config
 sudo docker compose up -d --build
 sudo docker compose ps
-sudo docker compose logs --tail=100 homeassistant ha-mcp flaim-mcp cloudflared
-curl -s http://127.0.0.1:8001/health   # flaim: providers + config warnings
+sudo docker compose logs --tail=100 homeassistant ha-mcp flaim-mcp citibike-mcp cloudflared
+curl -s http://127.0.0.1:8000/healthz  # ha-mcp
+curl -s http://127.0.0.1:8790/health   # flaim: providers + config warnings
+curl -s http://127.0.0.1:8002/readyz   # citibike: station count once feeds load
 ```
 
-`docker compose config` may print secrets; keep its output private. Register the MCP endpoints at https://poke.com/integrations/new using `https://ha-mcp.yourdomain.com/mcp` and `https://flaim.yourdomain.com/mcp`, with the matching bearer token. Verify using a harmless read-only operation.
+`docker compose config` may print secrets; keep its output private. Register the MCP endpoints at https://poke.com/integrations/new using `https://ha-mcp.yourdomain.com/mcp`, `https://flaim.yourdomain.com/mcp`, and `https://bike.yourdomain.com/mcp`, each with its matching bearer token. Verify using a harmless read-only operation.
 
 ## Security and troubleshooting
 
 Keep unique strong tokens, restrict Home Assistant account permissions, keep secrets out of Git, and do not configure public router port forwarding. HA data is persisted in `./ha-config`; back it up securely. Check Compose status/logs, HA startup, exact entity IDs, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
 
-References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
+References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://github.com/acyounk28/citibike-lookup , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
