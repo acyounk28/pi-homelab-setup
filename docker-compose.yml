@@ -1,4 +1,17 @@
 services:
+  homeassistant:
+    image: homeassistant/home-assistant:stable
+    container_name: homeassistant
+    environment:
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - ./ha-config:/config
+    ports:
+      - "8123:8123"
+    restart: unless-stopped
+    networks:
+      - homelab
+
   ha-mcp:
     build:
       context: ../ha-device-mcp
@@ -14,13 +27,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - homelab
+
   flaim-mcp:
     build:
       context: ../flaim
@@ -35,6 +49,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - homelab
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
@@ -46,3 +63,9 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    networks:
+      - homelab
+
+networks:
+  homelab:
+    name: pi-homelab

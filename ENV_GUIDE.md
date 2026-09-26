@@ -1,10 +1,10 @@
 # Environment setup guide (beginner-friendly)
 
-This guide explains every value in `.env.example`, where to find it, and how Home Assistant connects to your devices. You do not need a separate hardware/API token for each device when Home Assistant already controls it.
+This guide gets Home Assistant running in this Compose stack, then explains its connection to the MCP services and devices. Home Assistant is the bridge: when it controls a device, you do not need a separate device hardware token for this setup.
 
-## 1. Create your private `.env`
+## 1. Prepare configuration and start Home Assistant
 
-From the `pi-homelab-setup` directory:
+Clone `pi-homelab-setup`, `ha-device-mcp`, and `flaim` as sibling directories as described in README.md. From `pi-homelab-setup`, create the private environment file:
 
 ```sh
 cp .env.example .env
@@ -12,47 +12,40 @@ nano .env
 chmod 600 .env
 ```
 
-Replace placeholder values after `=`; do not add spaces around `=`. Save in nano with Ctrl+O, Enter, then Ctrl+X. `.env` contains secrets: never commit it, share it, or paste it into support requests.
+Keep `HA_URL=http://homeassistant:8123` when using the included Compose bridge network. `homeassistant` is the Compose service name, so containers on that network resolve it automatically. `TZ` is the timezone used by the Home Assistant container; set it to the correct IANA timezone for your location if different. Do not put secrets in `.env.example`, and never commit/share `.env`.
 
-## 2. The one Home Assistant connection
+Start the Home Assistant service first (this avoids needing the other repositories or credentials during initial onboarding):
 
-`HA_URL` is the address of your Home Assistant server reachable from the Docker host, including port 8123. Examples: `http://homeassistant.local:8123` or `http://192.168.1.50:8123` (use your actual address, not the example IP).
+```sh
+sudo docker compose up -d homeassistant
+sudo docker compose logs -f homeassistant
+```
 
-To create `HA_LONG_LIVED_ACCESS_TOKEN`, sign into Home Assistant as the account the service should use, click your profile/name, open Security, find Long-Lived Access Tokens, choose Create Token, name it, and copy it immediately. Paste the complete token into `.env`. Treat it like a password; a dedicated limited-permission HA user is preferable. This single Home Assistant token authorizes this server to communicate with devices HA controls. You do not need to find or enter separate Windmill, Pura, Oasis, or Hatch device hardware tokens for this bridge.
+From a browser on the same LAN, visit `http://<pi-ip>:8123` (replace `<pi-ip>` with the Pi's actual LAN address). Wait for first startup, then create the Home Assistant owner/admin account and finish location/setup prompts. The saved config persists in `./ha-config`. Home Assistant is also reachable on the Docker host at `http://localhost:8123`.
 
-`HA_TIMEOUT_SECONDS` and `HA_VERIFY_SSL` are connection settings; keep the defaults unless you know why they need changing. `MCP_HOST`, `MCP_PORT`, and `MCP_PATH` are server settings; retain defaults. Set a unique, strong `MCP_AUTH_TOKEN` for the MCP endpoint. `MCP_ALLOWED_HOSTS` is a comma-separated hostname allowlist; retain localhost entries and add the public hostname used for HA MCP.
+If discovery of devices using mDNS, SSDP, or HomeKit does not work over bridge networking, Home Assistant may need Linux host networking. See README.md for the host-network alternative and its HA_URL change. Do not run both modes at once.
 
-## 3. Make devices available in Home Assistant
+## 2. Create the Home Assistant access token
 
-Home Assistant is the single bridge: first integrate each device into HA, then use the entity HA creates. Integrations and entity availability depend on the device model, firmware, and installation; a device may not expose every control.
+In the Home Assistant UI, click your profile/name, open Security, find Long-Lived Access Tokens, choose Create Token, give it a recognizable name, and copy it immediately. Put the complete token into `HA_LONG_LIVED_ACCESS_TOKEN` in `.env`. Keep `HA_URL=http://homeassistant:8123` for the included bridge configuration. This one Home Assistant token lets `ha-device-mcp` communicate with Home Assistant and its supported devices; you do not need separate Windmill, Pura, Oasis, or Hatch hardware tokens when HA controls those devices.
 
-- Windmill fan: pair/add it to Home Assistant through a compatible route such as HomeKit Device/Controller, Local Tuya or the Tuya integration, or a smart plug (which provides plug power control, not fan speed controls). After setup, look in Developer Tools -> States for an entity, often `fan.windmill_ac` or `fan.bedroom_fan`; the actual ID may differ. Important: the current `ha-device-mcp` configuration does not define or consume `WINDMILL_FAN_ENTITY_ID` or `WINDMILL_ENTITY_ID` and does not provide Windmill fan tools. Do not add either variable expecting this MCP server to control it. A future/application change is needed to support Windmill here.
-- Pura: add the Pura Home Assistant integration (for example the `ha-pura` custom integration) and complete its setup. It can expose entities such as `light.<device>_nightlight` and `select.<device>_fragrance` / `select.<device>_intensity`. Pura's fragrance controls are not fan entities.
-- Oasis: add the supported Oasis Mini integration/custom component (such as `ha-oasis-control`). It can expose a light entity such as `light.oasis_mini_led`.
-- Hatch: add the Hatch integration/custom component (such as `ha_hatch`). Depending on model, it may expose `light.*`, `media_player.*`, optional `switch.*`, and favorite `scene.*` entities.
-- Other routes: a device may be brought into HA via a supported native integration, HomeKit, SmartThings, Tuya, or a compatible custom component. Use only a route that actually supports your model and desired controls. The MCP server can only operate entities/integrations it implements; making an entity visible in HA does not automatically add MCP tools for it.
+`HA_TIMEOUT_SECONDS` and `HA_VERIFY_SSL` can normally stay at their example defaults. `MCP_HOST`, `MCP_PORT`, and `MCP_PATH` are service settings; retain defaults. Replace `MCP_AUTH_TOKEN` with a strong unique secret (generate one on the host using `openssl rand -hex 32`). Add the public HA MCP hostname to comma-separated `MCP_ALLOWED_HOSTS` while retaining localhost entries.
 
-### Find and copy an entity ID
+## 3. Add device integrations and find entity IDs
 
-In Home Assistant, open Developer Tools -> States. Search by device/friendly name. Select the entity and copy its exact entity ID, including its domain (`light.`, `select.`, `media_player.`, `switch.`, or `fan.`). Do not copy the display name or guess. For supported roles, put the ID in the matching optional `.env` setting listed in `.env.example`. The current `ha-device-mcp` supports explicit `OASIS_LIGHT_ENTITY_ID`, `PURA_NIGHTLIGHT_ENTITY_ID`, `PURA_FRAGRANCE_SELECT_ENTITY_ID`, `PURA_INTENSITY_SELECT_ENTITY_ID`, `HATCH_LIGHT_ENTITY_ID`, `HATCH_MEDIA_PLAYER_ENTITY_ID`, and `HATCH_POWER_SWITCH_ENTITY_ID`; it auto-discovers omitted supported roles when exactly one match exists. It does not support Windmill or generic `WINDMILL_*` variables at present.
+In Home Assistant, open Settings -> Devices & services -> Add integration and add a compatible integration for each device. Which integration works depends on model, firmware, network, and desired controls. Device setup belongs in Home Assistant; do not look for per-device tokens to put in this deployment unless a particular HA integration itself asks you to authenticate with its provider.
 
-## 4. Create the MCP bearer token
+- Windmill fan: try a compatible HomeKit Device/Controller, Local Tuya/Tuya integration, or another supported method. A smart plug can provide on/off power control, but usually not fan speed or mode. Once added, the entity may look like `fan.windmill_ac` or `fan.bedroom_fan`; use the actual entity ID shown in HA. The current `ha-device-mcp` application does not implement Windmill fan controls and does not read `WINDMILL_FAN_ENTITY_ID` or `WINDMILL_ENTITY_ID`; a visible HA entity alone will not make it controllable through that MCP server.
+- Pura: add the compatible Pura integration/custom component (for example `ha-pura`) and complete its setup. It may provide `light.*` and `select.*` entities. Pura fragrance controls are not a fan entity.
+- Oasis: add a supported Oasis Mini integration/custom component (such as `ha-oasis-control`); it may provide a `light.*` entity.
+- Hatch: add a compatible Hatch integration/custom component (such as `ha_hatch`); depending on model, entities can include `light.*`, `media_player.*`, optional `switch.*`, and favorite `scene.*` entities.
+- Other supported options can include native HA integrations, HomeKit, SmartThings, Tuya, or custom components, but availability varies by model. HA visibility does not automatically mean the MCP application supports control of that entity.
 
-On the Docker host, run `openssl rand -hex 32` and paste the result into `MCP_AUTH_TOKEN`. Keep it private. The HA MCP client uses `Authorization: Bearer <token>` with the actual token replacing the placeholder. Do not reuse the Flaim token.
+To obtain IDs, open Developer Tools -> States, search for the device, select its entity, and copy the complete ID including domain, such as `fan.`, `light.`, `select.`, `media_player.`, or `switch.`. Do not guess from the friendly name. The current `ha-device-mcp` supports explicit `OASIS_LIGHT_ENTITY_ID`, `PURA_NIGHTLIGHT_ENTITY_ID`, `PURA_FRAGRANCE_SELECT_ENTITY_ID`, `PURA_INTENSITY_SELECT_ENTITY_ID`, `HATCH_LIGHT_ENTITY_ID`, `HATCH_MEDIA_PLAYER_ENTITY_ID`, and `HATCH_POWER_SWITCH_ENTITY_ID`; omitted supported roles may be auto-discovered. It currently has no Windmill entity setting.
 
-## 5. Flaim credentials
+## 4. Start the rest of the homelab
 
-`ESPN_S2` and `SWID` are sensitive ESPN login cookies, not Home Assistant or device tokens. Sign into ESPN fantasy football in a browser, open browser Developer Tools -> Application/Storage -> Cookies -> `espn.com`, and copy the complete values for cookies named `espn_s2` and `SWID` into their matching variables. Keep them secret.
-
-For `ESPN_LEAGUE_IDS`, copy the league ID value from the ESPN league URL after `leagueId=`. For `SLEEPER_LEAGUE_IDS`, copy the league ID segment from the Sleeper league URL after `/leagues/`. Use comma-separated IDs for multiple leagues. Set a separate strong `FLAIM_MCP_AUTH_TOKEN`; do not reuse the HA token. Keep the supplied Flaim host and port defaults.
-
-## 6. Cloudflare Tunnel
-
-In Cloudflare Zero Trust, open Networks -> Tunnels, select/create a tunnel and choose Docker/Linux setup. Copy only the token from the command's `--token` argument into `TUNNEL_TOKEN`. Treat it as a secret. Add public routes for `ha-mcp.yourdomain.com` to `http://ha-mcp:8000` and `flaim.yourdomain.com` to `http://flaim-mcp:8001` when cloudflared shares this Compose network. The HA hostname must also be in `MCP_ALLOWED_HOSTS`. Never expose the MCP ports directly to the public internet.
-
-## 7. Validate and start
-
-With the three sibling repositories cloned as described in README.md, run from this repository:
+After Home Assistant onboarding, integrations, and token setup, set the Flaim values in `.env` (ESPN cookies, league IDs, and a separate strong `FLAIM_MCP_AUTH_TOKEN`). Set `TUNNEL_TOKEN` if using Cloudflare Tunnel. Then, with all three sibling repositories present, validate and start the stack:
 
 ```sh
 sudo docker compose config
@@ -60,4 +53,10 @@ sudo docker compose up -d --build
 sudo docker compose ps
 ```
 
-`docker compose config` can print secrets; keep its output private. `.env.example` holds placeholders only. If an entity is missing, verify the integration and exact ID in Developer Tools -> States. For Windmill control through this deployment, note that the currently deployed ha-device-mcp application does not implement that device; an environment variable alone cannot add support.
+`docker compose config` can display secrets; keep its output private. ESPN `ESPN_S2` and `SWID` are sensitive browser cookies from the `espn.com` cookie store. ESPN league IDs come after `leagueId=` in the league URL; Sleeper league IDs are the path segment after `/leagues/`. Keep them private as appropriate.
+
+## 5. Cloudflare and security
+
+For the included bridge network, Cloudflare origins are `http://ha-mcp:8000` and `http://flaim-mcp:8001`; do not expose port 8123 publicly. Keep the unique MCP tokens and Home Assistant token private. The host can reach HA at `http://localhost:8123`, while other LAN clients use `http://<pi-ip>:8123`.
+
+If switching Home Assistant to host networking for discovery, remove its `ports` and `networks` entries and set `network_mode: host`; HA then listens on the host's network. Set `HA_URL=http://host.docker.internal:8123` for ha-mcp and add `extra_hosts: ["host.docker.internal:host-gateway"]` to ha-mcp in Compose. Host mode is Linux-specific and bypasses Compose network isolation for HA. Choose one network mode deliberately; the checked-in configuration uses bridge mode and `http://homeassistant:8123`.

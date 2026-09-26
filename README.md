@@ -1,6 +1,6 @@
 # Raspberry Pi Home Lab MCP services
 
-Deploy Home Assistant `ha-device-mcp` and fantasy-sports `flaim-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose them through a Cloudflare Tunnel. Both services use MCP over HTTP; preserve bearer authentication and container security settings.
+Deploy Home Assistant, Home Assistant `ha-device-mcp`, and fantasy-sports `flaim-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose the MCP services through a Cloudflare Tunnel. The included Home Assistant setup uses a Compose bridge network and persistent `./ha-config` storage.
 
 ## 1. Prepare the host
 
@@ -23,51 +23,56 @@ git clone https://github.com/acyounk28/flaim.git
 cd pi-homelab-setup
 ```
 
-## 3. Configure the environment and devices
+## 3. Start Home Assistant and complete first-run setup
+
+Create the private environment file and set `TZ` in `.env` to the appropriate IANA timezone. The example uses `HA_URL=http://homeassistant:8123`, the Compose service DNS name used by `ha-mcp` on the shared bridge network.
 
 ```sh
 cp .env.example .env
 nano .env
 chmod 600 .env
+sudo docker compose up -d homeassistant
+sudo docker compose logs -f homeassistant
 ```
 
-For Home Assistant, configure `HA_URL`, one `HA_LONG_LIVED_ACCESS_TOKEN`, a unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS`. The token is created in the Home Assistant user profile under Security -> Long-Lived Access Tokens. Home Assistant is the bridge to devices: if HA controls a device, you do not need a separate hardware token for that device. Add each device to HA first using a compatible integration, then find its exact entity ID under Developer Tools -> States.
+Once startup completes, open `http://<pi-ip>:8123` from a browser on the same LAN (replace `<pi-ip>` with the Pi's actual address). Create the Home Assistant owner/admin account and complete the initial setup/location prompts. Configuration persists under `./ha-config`. The host can also open `http://localhost:8123`.
 
-The current `ha-device-mcp` supports Pura, Oasis, and Hatch roles (see `.env.example` for their optional role-specific entity variables). Examples include Pura `light.*` / `select.*`, Oasis `light.*`, and Hatch `light.*`, `media_player.*`, optional `switch.*` and favorites `scene.*`; supported omitted IDs may be auto-discovered. The current application does not support a Windmill fan and does not consume `WINDMILL_ENTITY_ID` or `WINDMILL_FAN_ENTITY_ID`. Windmill may appear in HA via a compatible HomeKit, Local Tuya/Tuya route, or smart plug, with an entity such as `fan.windmill_ac`; that does not add Windmill controls to this MCP server. A smart plug exposes plug power rather than fan-speed controls. Do not set unsupported variables expecting them to work. See `ENV_GUIDE.md` for beginner-focused setup and device details.
+Add devices in Home Assistant at Settings -> Devices & services -> Add integration. Use a compatible integration for each exact model (native integrations, HomeKit, Tuya/Local Tuya, SmartThings, or an appropriate custom component may apply). After integration setup, use Developer Tools -> States to copy exact entity IDs. Create a Home Assistant Long-Lived Access Token from your profile -> Security -> Long-Lived Access Tokens and put it in `.env` as `HA_LONG_LIVED_ACCESS_TOKEN`. This single HA token is the bridge for HA-controlled devices; do not enter separate device hardware tokens for this stack unless a particular HA integration requires provider authentication.
 
-For Flaim, set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_AUTH_TOKEN`. Set `TUNNEL_TOKEN` for the included token-based Cloudflare tunnel service. Never commit or share `.env`; its example contains placeholders only.
+Windmill may appear through a compatible HomeKit/Tuya route or smart plug, as an entity such as `fan.windmill_ac`; smart plugs generally only provide power control. The current `ha-device-mcp` does not support Windmill controls and consumes neither `WINDMILL_ENTITY_ID` nor `WINDMILL_FAN_ENTITY_ID`. It currently supports Pura, Oasis, and Hatch roles (optional entity settings are documented in `.env.example`); Pura may expose `light.*`/`select.*`, Oasis `light.*`, and Hatch `light.*`, `media_player.*`, optional `switch.*` and favorite `scene.*`. HA exposing an entity does not automatically make it controllable through this MCP application. See `ENV_GUIDE.md` for beginner-oriented details.
 
-## 4. Configure Cloudflare Tunnel ingress
+## Home Assistant networking choices
 
-Create a Cloudflare Tunnel in the Cloudflare Zero Trust dashboard and configure public hostnames:
+The checked-in Compose configuration uses a standard bridge network: HA maps host port `8123` to container port `8123`, persists `./ha-config:/config`, and `ha-mcp` connects to `http://homeassistant:8123`. This is straightforward and works for normal API traffic. Some discovery protocols (mDNS, SSDP, HomeKit) may require Home Assistant host networking on Linux. To switch, change the HA service to `network_mode: host` and remove its `ports` and `networks`; set `HA_URL=http://host.docker.internal:8123` and add `extra_hosts: ["host.docker.internal:host-gateway"]` to `ha-mcp`. Do not use both modes simultaneously. Host networking reduces network isolation; prefer bridge mode unless discovery requires host mode.
+
+## 4. Configure environment and remaining services
+
+Configure the HA URL/token, strong unique `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_HOSTS` in `.env`. For Flaim set ESPN `ESPN_S2` and `SWID` cookies, `ESPN_LEAGUE_IDS`, `SLEEPER_LEAGUE_IDS`, and a separate strong `FLAIM_MCP_AUTH_TOKEN`. Set `TUNNEL_TOKEN` for the included Cloudflare tunnel service. Never commit or share `.env`; `.env.example` contains placeholders only.
+
+## 5. Configure Cloudflare Tunnel ingress
+
+Create a Cloudflare Tunnel in Zero Trust and configure public hostnames:
 
 - `ha-mcp.yourdomain.com` -> `http://ha-mcp:8000`
 - `flaim.yourdomain.com` -> `http://flaim-mcp:8001`
 
-These service-name origins work when cloudflared shares the Compose network. Add the HA hostname to `MCP_ALLOWED_HOSTS`. For a locally managed tunnel, equivalent ingress rules can be configured in `cloudflared/config.yml`; if cloudflared runs outside the Compose network, use `http://localhost:8000` and `http://localhost:8001`. Do not expose MCP ports directly to the public internet; host port bindings are loopback-only.
+These service-name origins work when cloudflared shares the Compose network. Add the HA MCP hostname to `MCP_ALLOWED_HOSTS`. Do not expose Home Assistant port 8123 or MCP ports directly to the public internet.
 
-## 5. Start services
+## 6. Start and verify the stack
+
+After Home Assistant first-run setup and environment configuration, run from this repository (with all three sibling repositories present):
 
 ```sh
 sudo docker compose config
 sudo docker compose up -d --build
 sudo docker compose ps
-sudo docker compose logs --tail=100 ha-mcp flaim-mcp cloudflared
+sudo docker compose logs --tail=100 homeassistant ha-mcp flaim-mcp cloudflared
 ```
 
-`docker compose config` may print secrets; keep its output private. Confirm each application's documented health endpoint and MCP endpoint.
-
-## 6. Register MCP endpoints in Poke
-
-At https://poke.com/integrations/new register each server using its public MCP URL:
-
-- `https://ha-mcp.yourdomain.com/mcp`
-- `https://flaim.yourdomain.com/mcp`
-
-Use the matching server's bearer token and verify each connection with a harmless read-only operation. Follow each application's documentation if its auth behavior changes; do not weaken authentication.
+`docker compose config` may print secrets; keep its output private. Register the MCP endpoints at https://poke.com/integrations/new using `https://ha-mcp.yourdomain.com/mcp` and `https://flaim.yourdomain.com/mcp`, with the matching bearer token. Verify using a harmless read-only operation.
 
 ## Security and troubleshooting
 
-The Compose configuration runs services as UID/GID 10001, drops Linux capabilities, enables `no-new-privileges`, uses a read-only container filesystem, and restarts unless stopped. Keep unique strong tokens, restrict Home Assistant permissions, keep secrets out of Git, and do not configure public router port forwarding. Check Compose status/logs, entity IDs, credentials, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
+Keep unique strong tokens, restrict Home Assistant account permissions, keep secrets out of Git, and do not configure public router port forwarding. HA data is persisted in `./ha-config`; back it up securely. Check Compose status/logs, HA startup, exact entity IDs, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
 
 References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
