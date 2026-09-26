@@ -1,23 +1,22 @@
-# Cloudflare Tunnel setup
+# Cloudflare Tunnel setup and access security
 
-The Compose service uses a remotely-managed tunnel token (`TUNNEL_TOKEN`). Create a tunnel in Cloudflare Zero Trust, copy its token into `.env`, and configure its public hostname route in the Cloudflare dashboard with service `http://ha-mcp:8000`. Ensure the hostname route points to the MCP endpoint path `/mcp` at the client (the tunnel origin routes to the service root; configure the desired path/host appropriately). Keep `MCP_AUTH_TOKEN` enabled; TLS at the tunnel does not replace MCP bearer authentication.
+The Compose service uses a remotely-managed tunnel token (`TUNNEL_TOKEN`). Create a tunnel in Cloudflare Zero Trust, copy its token into the Pi's private `.env`, and configure a public hostname route to `http://ha-mcp:8000`. The client endpoint is `https://YOUR_HOSTNAME/mcp` (this app uses Streamable HTTP, not `/sse`). Keep `MCP_AUTH_TOKEN` enabled: tunnel TLS does not authenticate MCP callers.
 
-Quick setup:
+## Token-mode setup
 
-1. Install `cloudflared` locally and authenticate: `cloudflared tunnel login` (opens browser; saves an account certificate locally).
-2. Create a named tunnel: `cloudflared tunnel create ha-device-mcp`.
-3. Get its run token: `cloudflared tunnel token ha-device-mcp`; copy the output to `TUNNEL_TOKEN` in the homelab repo's `.env` (never paste it into source control).
-4. In Cloudflare Zero Trust, configure the tunnel's public hostname and set the service URL to `http://ha-mcp:8000`. Add the hostname to `MCP_ALLOWED_HOSTS` and restart the stack.
-5. Run `docker compose config` (avoid sharing output containing interpolated secrets), then `docker compose up -d --build` and `docker compose logs --tail=100 cloudflared`.
+1. Ensure the domain is active on Cloudflare. Nameserver delegation and tunnel/hostname configuration are separate.
+2. In Zero Trust, go to Networks → Tunnels → Add a Tunnel → Cloudflared and create a remotely managed tunnel.
+3. Copy its token into `.env` as `TUNNEL_TOKEN=...`; protect the file with `chmod 600 .env`. Never commit or share the token.
+4. Add a Public Hostname, such as `mcp.yourdomain.com`, with service/origin `http://ha-mcp:8000`. The hostname is the public address; `/mcp` is the client endpoint path.
+5. Include the hostname in `MCP_ALLOWED_HOSTS` and maintain the MCP bearer token. Do not add a router port-forward.
+6. Start/verify with `sudo docker compose up -d --build` and inspect `sudo docker compose logs --tail=100 cloudflared ha-mcp`.
 
-The token-based container uses Cloudflare's remotely managed tunnel configuration; the `config.yml` adjacent to this guide is a local-managed credentials-file example, not loaded by the token-mode Compose service. For local mode, use `cloudflared tunnel run --config /etc/cloudflared/config.yml` and mount both the config and the JSON credentials into the cloudflared container instead of setting a token. Do not configure the two modes simultaneously. The `config.yml` ingress target is the Compose service DNS name `ha-mcp:8000` and includes a final 404 catch-all.
+## Optional Cloudflare Access for machine clients
 
-For a one-command login/create/token workflow run these commands on a trusted workstation:
+A Cloudflare Access Service Auth policy may require Service Token headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Configure this only after confirming that Poke's custom integration can send both headers on every MCP request. If Poke cannot provide the headers, Access will block it; do not remove MCP bearer authentication or expose an unprotected alternative. Continue to use `MCP_AUTH_TOKEN` as defense in depth and do not place secrets in a URL.
 
-```sh
-cloudflared tunnel login
-cloudflared tunnel create ha-device-mcp
-cloudflared tunnel token ha-device-mcp
-```
+## Alternative local-managed mode
 
-Then put the token in `.env`; configure the DNS/public hostname and origin in Cloudflare dashboard. Revoke/rotate the token immediately if exposed. Cloudflare route setup may require an owned domain active on Cloudflare.
+`config.yml` is a local-managed credentials-file example and is not consumed by the token-mode Compose service. For local mode, use `cloudflared tunnel run --config /etc/cloudflared/config.yml` and mount the config and JSON credentials instead of setting a tunnel token. Do not configure token-mode and local-managed mode simultaneously. The example ingress targets Compose DNS name `ha-mcp:8000` and has a final 404 catch-all.
+
+Revoke/rotate a tunnel token immediately if exposed. Official docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
