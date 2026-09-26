@@ -4,7 +4,7 @@ This guide gets Home Assistant running in this Compose stack, then explains its 
 
 ## 1. Prepare configuration and start Home Assistant
 
-Clone `pi-homelab-setup`, `ha-device-mcp`, and `flaim` as sibling directories as described in README.md. From `pi-homelab-setup`, create the private environment file:
+Clone `pi-homelab-setup`, `ha-device-mcp`, `flaim`, and `citibike-lookup` as sibling directories as described in README.md. From `pi-homelab-setup`, create the private environment file:
 
 ```sh
 cp .env.example .env
@@ -45,7 +45,7 @@ To obtain IDs, open Developer Tools -> States, search for the device, select its
 
 ## 4. Start the rest of the homelab
 
-After Home Assistant onboarding, integrations, and token setup, set the Flaim values in `.env` (ESPN cookies, league IDs, and a separate strong `FLAIM_MCP_AUTH_TOKEN`). Set `TUNNEL_TOKEN` if using Cloudflare Tunnel. Then, with all three sibling repositories present, validate and start the stack:
+After Home Assistant onboarding, integrations, and token setup, set the Flaim values in `.env` (ESPN cookies, league IDs, and a separate strong `FLAIM_MCP_TOKEN`). Set `TUNNEL_TOKEN` if using Cloudflare Tunnel. Then, with all three sibling repositories present, validate and start the stack:
 
 ```sh
 sudo docker compose config
@@ -53,10 +53,10 @@ sudo docker compose up -d --build
 sudo docker compose ps
 ```
 
-`docker compose config` can display secrets; keep its output private. ESPN `ESPN_S2` and `SWID` are sensitive browser cookies from the `espn.com` cookie store. ESPN league IDs come after `leagueId=` in the league URL; Sleeper league IDs are the path segment after `/leagues/`. Keep them private as appropriate.
+`docker compose config` can display secrets; keep its output private. ESPN `ESPN_S2` and `SWID` are sensitive browser cookies from the `espn.com` cookie store. ESPN league IDs come after `leagueId=` in the league URL; Sleeper league IDs are the path segment after `/leagues/`. Keep them private as appropriate. Flaim consumes these variables directly (`SWID`/`ESPN_SWID`, `ESPN_S2`/`espn_s2`, `FLAIM_MCP_TOKEN` or legacy `FLAIM_MCP_AUTH_TOKEN` are all accepted); no `config/leagues.json` is needed. If the ESPN cookies are missing or still placeholders, `flaim-mcp` starts with ESPN disabled and reports `providers.espn: missing-credentials` at `/health`, while Sleeper leagues keep working.
 
 ## 5. Cloudflare and security
 
-For the included bridge network, Cloudflare origins are `http://ha-mcp:8000` and `http://flaim-mcp:8001`; do not expose port 8123 publicly. Keep the unique MCP tokens and Home Assistant token private. The host can reach HA at `http://localhost:8123`, while other LAN clients use `http://<pi-ip>:8123`.
+For the included bridge network, Cloudflare origins are `http://ha-mcp:8000`, `http://flaim-mcp:8790`, and `http://citibike-mcp:8002`; the Citi Bike service uses `CITIBIKE_MCP_TOKEN` (or `MCP_AUTH_TOKEN` if unset) and optional `CITIBIKE_MCP_ALLOWED_HOSTS`; do not expose port 8123 publicly. Keep the unique MCP tokens and Home Assistant token private. The host can reach HA at `http://localhost:8123`, while other LAN clients use `http://<pi-ip>:8123`.
 
 If switching Home Assistant to host networking for discovery, remove its `ports` and `networks` entries and set `network_mode: host`; HA then listens on the host's network. Set `HA_URL=http://host.docker.internal:8123` for ha-mcp and add `extra_hosts: ["host.docker.internal:host-gateway"]` to ha-mcp in Compose. Host mode is Linux-specific and bypasses Compose network isolation for HA. Choose one network mode deliberately; the checked-in configuration uses bridge mode and `http://homeassistant:8123`.

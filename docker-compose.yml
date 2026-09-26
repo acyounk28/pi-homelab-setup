@@ -35,16 +35,78 @@ services:
     networks:
       - homelab
 
+  # Flaim reads leagues and credentials straight from .env (ESPN_LEAGUE_IDS,
+  # SLEEPER_LEAGUE_IDS, SWID, ESPN_S2, FLAIM_MCP_TOKEN); no config/leagues.json
+  # is required or mounted. The container always listens on 8790 (the Cloudflare
+  # origin is http://flaim-mcp:8790) and serves Streamable HTTP/SSE at /mcp,
+  # health at /health.
   flaim-mcp:
     build:
       context: ../flaim
+    image: flaim-mcp:local
+    container_name: flaim-mcp
     env_file:
       - .env
+    environment:
+      # Pinned so a stale FLAIM_MCP_PORT in .env cannot move the port away from
+      # the tunnel origin. FLAIM_MCP_AUTH_TOKEN is accepted as a legacy alias.
+      FLAIM_MCP_TOKEN: ${FLAIM_MCP_TOKEN:-${FLAIM_MCP_AUTH_TOKEN:?Set FLAIM_MCP_TOKEN in .env}}
+      FLAIM_MCP_HOST: 0.0.0.0
+      FLAIM_MCP_PORT: "8790"
+      PORT: "8790"
     ports:
-      - "127.0.0.1:8001:8001"
-    user: "10001:10001"
+      - "127.0.0.1:8790:8790"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8790/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     read_only: true
+    # Writable scratch for the player cache; the image runs as the unprivileged
+    # `node` user and falls back to in-memory caching if this is missing.
+    tmpfs:
+      - /data:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - homelab
+
+  # Citi Bike GBFS lookup (acyounk28/citibike-lookup). It uses the generic
+  # MCP_* variable names, which the shared .env already assigns to ha-mcp, so
+  # this service does NOT load env_file; its values are set explicitly from
+  # CITIBIKE_* keys. Origin: http://citibike-mcp:8002/mcp, readiness /readyz.
+  citibike-mcp:
+    build:
+      context: ../citibike-lookup
+    image: citibike-lookup:local
+    container_name: citibike-mcp
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8002"
+      MCP_PATH: /mcp
+      # Prefer a dedicated CITIBIKE_MCP_TOKEN; falls back to the ha-mcp token so an
+      # existing .env keeps working.
+      MCP_AUTH_TOKEN: ${CITIBIKE_MCP_TOKEN:-${MCP_AUTH_TOKEN:?Set CITIBIKE_MCP_TOKEN in .env}}
+      MCP_ALLOWED_HOSTS: ${CITIBIKE_MCP_ALLOWED_HOSTS:-}
+      GBFS_URL: ${GBFS_URL:-https://gbfs.citibikenyc.com/gbfs/2.3/gbfs.json}
+      GBFS_STATUS_POLL_SECONDS: ${GBFS_STATUS_POLL_SECONDS:-60}
+      LOG_LEVEL: ${CITIBIKE_LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8002:8002"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/readyz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
     cap_drop:
       - ALL
     security_opt:
@@ -60,6 +122,10 @@ services:
     depends_on:
       ha-mcp:
         condition: service_healthy
+      flaim-mcp:
+        condition: service_started
+      citibike-mcp:
+        condition: service_started
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
