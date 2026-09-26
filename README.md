@@ -1,73 +1,98 @@
-# Raspberry Pi 5 Home Assistant MCP server for Poke
+# Raspberry Pi Home Lab MCP services
 
-Deploy `acyounk28/ha-device-mcp` on a Raspberry Pi 5 with Docker Compose, then expose it through a Cloudflare Zero Trust Tunnel. The server uses MCP Streamable HTTP at `/mcp` (not legacy SSE `/sse`).
+Deploy Home Assistant's `ha-mcp` and fantasy-sports `flaim-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose them through a Cloudflare Tunnel. Both services use MCP over HTTP; preserve bearer authentication and the container security settings described below.
 
-## Current status
+## 1. Prepare the host
 
-Prepared in the repositories: the deployment repo, the upstream application repo with multi-stage Dockerfile and non-root runtime user, a Compose stack for `ha-mcp` plus `cloudflared`, and example configuration. Cloudflare nameserver changes were reported by Alex but have not been independently verified here. Nameservers alone do not create a tunnel or public hostname route. Still required on the Pi: flash/boot OS, install Docker, clone both repositories, privately set `.env`, create the Cloudflare tunnel and custom hostname, then register and verify the endpoint in Poke.
-
-## Prepare the Pi
-
-Install Raspberry Pi OS 64-bit using Raspberry Pi Imager and configure a user, SSH, and network. Connect with `ssh YOUR_USER@raspberrypi.local` or the router-assigned LAN IP; use a DHCP reservation for a stable address. Update and reboot:
+Install a 64-bit Raspberry Pi OS or compatible Linux, enable SSH, and install Docker Engine and the Compose plugin using Docker's official guide: https://docs.docker.com/engine/install/debian/ . Verify Docker and Compose:
 
 ```sh
-sudo apt update && sudo apt full-upgrade -y
-sudo reboot
+sudo docker run --rm hello-world
+sudo docker compose version
 ```
 
-Install Docker Engine and Compose plugin following the current official Debian/Raspberry Pi OS guide: https://docs.docker.com/engine/install/debian/ . Confirm `uname -m` is `aarch64`, then run `sudo docker run --rm hello-world` and `sudo docker compose version`.
+## 2. Clone all three repositories as siblings
 
-## Clone and configure
-
-Compose expects the application repository as a sibling directory:
+The Compose file builds from `../ha-device-mcp` and `../flaim`, so keep both application repositories next to the deployment repository (not inside it):
 
 ```sh
 mkdir -p ~/services && cd ~/services
 git clone https://github.com/acyounk28/pi-homelab-setup.git
 git clone https://github.com/acyounk28/ha-device-mcp.git
+git clone https://github.com/acyounk28/flaim.git
 cd pi-homelab-setup
+```
+
+The resulting layout should be `~/services/pi-homelab-setup`, `~/services/ha-device-mcp`, and `~/services/flaim`.
+
+## 3. Configure environment variables
+
+Copy the example and edit it privately:
+
+```sh
 cp .env.example .env
 nano .env
 chmod 600 .env
 ```
 
-Set `HA_URL` (use `http://host.docker.internal:8123` if Home Assistant runs on the Pi host), `HA_LONG_LIVED_ACCESS_TOKEN`, a separate strong `MCP_AUTH_TOKEN`, the chosen exact hostname in `MCP_ALLOWED_HOSTS`, and the Cloudflare tunnel's `TUNNEL_TOKEN`. Use a dedicated non-admin Home Assistant account where feasible. Never commit `.env` or share tokens.
+For `ha-mcp`, set the Home Assistant base URL (`HA_URL`), a Home Assistant long-lived access token (`HA_LONG_LIVED_ACCESS_TOKEN`), and the exact Home Assistant entity IDs for the Windmill, Pura, and Oasis devices. Set a strong, unique `MCP_AUTH_TOKEN`; configure `MCP_ALLOWED_HOSTS` for the hostname used to reach this service. If Home Assistant runs on the Docker host, `http://host.docker.internal:8123` is often appropriate; otherwise use its reachable LAN URL.
 
-## Create the Cloudflare Tunnel
+For `flaim-mcp`, set the ESPN `ESPN_S2` and `SWID` cookie values, the relevant comma-separated `ESPN_LEAGUE_IDS` and `SLEEPER_LEAGUE_IDS`, and a strong unique `FLAIM_MCP_AUTH_TOKEN`. Set the Cloudflare tunnel token as `TUNNEL_TOKEN` if using the included token-based tunnel service. Never commit or share `.env`; the example contains placeholders only. Check the Flaim repository's current configuration documentation for exact variable naming and league-ID format before running.
 
-1. Confirm the domain is active in Cloudflare.
-2. In Cloudflare Zero Trust, open Networks → Tunnels → Add a Tunnel → Cloudflared and create a remotely-managed tunnel.
-3. Copy its token into `.env` as `TUNNEL_TOKEN=...`.
-4. Add a public hostname such as `mcp.yourdomain.com`; set the service/origin to `http://ha-mcp:8000`.
-5. Put the exact hostname in `MCP_ALLOWED_HOSTS`. The Poke endpoint is `https://YOUR_HOSTNAME/mcp`.
+## 4. Configure Cloudflare Tunnel ingress
 
-No router port-forward is required or recommended. See `cloudflared/README.md` for Access Service Token considerations and token-mode details.
+Create a Cloudflare Tunnel in the Cloudflare Zero Trust dashboard (Networks → Tunnels), and configure public hostnames pointing to these Compose service names and container ports:
 
-## Start and connect
+- `ha-mcp.yourdomain.com` → `http://ha-mcp:8000`
+- `flaim.yourdomain.com` → `http://flaim-mcp:8001`
+
+For the included token-managed `cloudflared` Compose service, put the tunnel token in `.env`. In the Zero Trust dashboard, add both public hostnames to that tunnel with the origins above. The service-name origins work when cloudflared is connected to the same Compose network. Alternatively, if running cloudflared outside this Compose network, use `http://localhost:8000` and `http://localhost:8001` as appropriate.
+
+For a locally managed tunnel, `cloudflared/config.yml` can use ingress rules like:
+
+```yaml
+ingress:
+  - hostname: ha-mcp.yourdomain.com
+    service: http://ha-mcp:8000
+  - hostname: flaim.yourdomain.com
+    service: http://flaim-mcp:8001
+  - service: http_status:404
+```
+
+For a cloudflared process outside the Compose network, substitute `http://localhost:8000` and `http://localhost:8001`. Do not expose the MCP ports directly to the public internet; the Compose port bindings are loopback-only.
+
+## 5. Start both services
+
+From `pi-homelab-setup`, validate and launch:
 
 ```sh
 sudo docker compose config
 sudo docker compose up -d --build
 sudo docker compose ps
-sudo docker compose logs --tail=100 ha-mcp cloudflared
-curl -i http://127.0.0.1:8000/healthz
+sudo docker compose logs --tail=100 ha-mcp flaim-mcp cloudflared
 ```
 
-`docker compose config` can render secrets; do not share its output. In https://poke.com/integrations/new, configure `https://YOUR_HOSTNAME/mcp` and the bearer authorization header using `MCP_AUTH_TOKEN` if supported. Test a harmless read-only tool first. If Poke cannot send the required auth headers, resolve compatibility before weakening authentication.
+The Compose configuration binds service ports to host loopback: `http://127.0.0.1:8000` and `http://127.0.0.1:8001`. Confirm each application's documented health endpoint or test its MCP endpoint. Do not assume the Flaim health-check path; consult its repository documentation. `docker compose config` may print secrets, so keep its output private.
 
-## Security Hardening
+## 6. Register both MCP endpoints in Poke
 
-See [SECURITY.md](SECURITY.md) for the full checklist and commands. In brief: require MCP bearer-token authentication; optionally use Cloudflare Access Service Tokens only if Poke can send `CF-Access-Client-Id` and `CF-Access-Client-Secret`; allow no inbound router ports; firewall the Pi to deny incoming traffic except trusted LAN/Tailscale SSH; disable SSH root/password login and use Ed25519 keys; run the app as non-root with a read-only filesystem, all Linux capabilities dropped, and `no-new-privileges`.
+Open https://poke.com/integrations/new and register each server separately using its public MCP URL:
 
-These controls reduce exposure but cannot guarantee that a system cannot be compromised. Keep OS, Docker, and images updated, protect and rotate secrets, and retain a local recovery path before changing SSH/firewall settings.
+- `https://ha-mcp.yourdomain.com/mcp`
+- `https://flaim.yourdomain.com/mcp`
+
+Use the authentication method and bearer token configured for the corresponding server (`MCP_AUTH_TOKEN` for Home Assistant and `FLAIM_MCP_AUTH_TOKEN` for Flaim), as required by each server's current documentation and the Poke integration form. Verify each connection with a harmless read-only operation first. If either application uses a different MCP path or auth-header convention, follow that repository's documentation rather than weakening authentication.
+
+## Security hardening
+
+Both application services are configured to run as UID/GID 10001, drop all Linux capabilities, enable `no-new-privileges`, use a read-only container filesystem, and restart unless stopped. The Home Assistant service also has a health check. Keep these controls intact; confirm the application images support the configured non-root UID and read-only filesystem. Use unique, strong MCP tokens, restrict Home Assistant account permissions, keep secrets out of Git, update the host and images, and do not configure public router port forwarding. Cloudflare Access can add another layer only if the MCP client can supply the required Access credentials.
 
 ## Troubleshooting
 
-- `sudo docker compose ps` and `sudo docker compose logs --tail=200 ha-mcp cloudflared`: inspect health and startup errors; redact secrets.
-- `curl -i http://127.0.0.1:8000/healthz`: local app health check.
-- `421 Misdirected Request`: check `MCP_ALLOWED_HOSTS` exactly.
-- `unauthorized`: check MCP bearer credential, not the Home Assistant token.
-- Tunnel cannot reach origin: verify `ha-mcp` health and origin `http://ha-mcp:8000`.
-- Never fix problems by forwarding port 8000 or removing authentication.
+- `sudo docker compose ps` and `sudo docker compose logs --tail=200 ha-mcp flaim-mcp cloudflared` show container status and startup errors; redact secrets before sharing logs.
+- A build-context error usually means the three repository directories are not siblings as shown above.
+- Check entity IDs, league IDs, and provider credentials against the applications' documentation.
+- Confirm each Cloudflare public hostname routes to the correct service and port, and that the cloudflared container shares the Compose network.
+- Do not solve connectivity issues by exposing ports publicly or removing authentication/security hardening.
 
-References: https://github.com/acyounk28/ha-device-mcp , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
+References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
