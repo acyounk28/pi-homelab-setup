@@ -1,12 +1,50 @@
+# Pi 5 (arm64) homelab MCP stack. Sibling checkouts are expected next to this repo:
+#   ../ha-device-mcp      -> ha-mcp       host 127.0.0.1:8000 -> container 8000  (Streamable HTTP /mcp)
+#   ../flaim/nfl-metrics  -> flaim-mcp    host 127.0.0.1:8001 -> container 8800  (SSE /sse, or /mcp)
+#   ../citibike-lookup    -> citibike-mcp host 127.0.0.1:8002 (see README; repo has no code yet)
+# All images build natively for the host architecture (no `platform:` pins).
+# Secrets are passed per service with explicit `environment:` maps so one
+# service never receives another service's tokens.
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
 services:
   ha-mcp:
+    <<: *hardening
     build:
-      context: ./ha-device-mcp
-    env_file:
-      - .env
+      context: ../ha-device-mcp
+    image: ha-device-mcp:local
+    # Dockerfile runs as appuser (UID 10001); re-asserted here.
+    user: "10001:10001"
+    environment:
+      HA_URL: ${HA_URL:?Set HA_URL in .env}
+      HA_LONG_LIVED_ACCESS_TOKEN: ${HA_LONG_LIVED_ACCESS_TOKEN:?Set HA_LONG_LIVED_ACCESS_TOKEN in .env}
+      HA_TIMEOUT_SECONDS: ${HA_TIMEOUT_SECONDS:-10}
+      HA_VERIFY_SSL: ${HA_VERIFY_SSL:-true}
+      OASIS_LIGHT_ENTITY_ID: ${OASIS_LIGHT_ENTITY_ID:-}
+      PURA_NIGHTLIGHT_ENTITY_ID: ${PURA_NIGHTLIGHT_ENTITY_ID:-}
+      PURA_FRAGRANCE_SELECT_ENTITY_ID: ${PURA_FRAGRANCE_SELECT_ENTITY_ID:-}
+      PURA_INTENSITY_SELECT_ENTITY_ID: ${PURA_INTENSITY_SELECT_ENTITY_ID:-}
+      HATCH_LIGHT_ENTITY_ID: ${HATCH_LIGHT_ENTITY_ID:-}
+      HATCH_MEDIA_PLAYER_ENTITY_ID: ${HATCH_MEDIA_PLAYER_ENTITY_ID:-}
+      HATCH_POWER_SWITCH_ENTITY_ID: ${HATCH_POWER_SWITCH_ENTITY_ID:-}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8000:8000"
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
       interval: 30s
@@ -15,19 +53,80 @@ services:
       start_period: 10s
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+  # Flaim "NFL GM" MCP = the Python FastMCP server in flaim/nfl-metrics
+  # (nflverse metrics + GM tools). The Node gateway at flaim/Dockerfile
+  # (ESPN/Sleeper league tools) is NOT run here; see README.
+  flaim-mcp:
+    <<: *hardening
+    build:
+      context: ../flaim/nfl-metrics
+    image: flaim-nfl-metrics:local
+    # Dockerfile runs as user `nfl` (UID 10001).
+    user: "10001:10001"
+    environment:
+      NFL_MCP_TOKEN: ${NFL_MCP_TOKEN:?Set NFL_MCP_TOKEN in .env}
+      NFL_MCP_TRANSPORT: ${NFL_MCP_TRANSPORT:-sse}
+      NFL_DATA_DIR: /data/nfl
+      NFLREADPY_CACHE_DIR: /data/nfl/nflreadpy
+      NFL_RAW_TTL_HOURS: ${NFL_RAW_TTL_HOURS:-12}
+      NFL_DERIVED_TTL_HOURS: ${NFL_DERIVED_TTL_HOURS:-6}
+      NFL_MAX_SEASONS_IN_MEMORY: ${NFL_MAX_SEASONS_IN_MEMORY:-1}
+      POLARS_MAX_THREADS: ${POLARS_MAX_THREADS:-3}
+      HOST: 0.0.0.0
+      PORT: "8800"
+    volumes:
+      - nfl-data:/data
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ports:
+      - "127.0.0.1:8001:8800"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8800/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${NFL_MEM_LIMIT:-1536m}
+
+  # citibike-mcp: acyounk28/citibike-lookup currently contains only a README
+  # (no Dockerfile, entrypoint, or env contract), so no runnable service can be
+  # defined yet. Reserved host port: 127.0.0.1:8002. Uncomment and fill in once
+  # the repo ships a Dockerfile; keep the same hardening block.
+  #
+  # citibike-mcp:
+  #   <<: *hardening
+  #   build:
+  #     context: ../citibike-lookup
+  #   image: citibike-lookup:local
+  #   environment:
+  #     # copy the variables from ../citibike-lookup/.env.example here
+  #   ports:
+  #     - "127.0.0.1:8002:<CONTAINER_PORT>"
+
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
+    command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
     depends_on:
       ha-mcp:
         condition: service_healthy
+      flaim-mcp:
+        condition: service_healthy
     restart: unless-stopped
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  nfl-data:

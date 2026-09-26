@@ -4,5 +4,10 @@ tunnel: YOUR_TUNNEL_UUID
 credentials-file: /etc/cloudflared/YOUR_TUNNEL_UUID.json
 no-autoupdate: true
 ingress:
-  - service: http://ha-mcp:8000
+  - hostname: ha.yourdomain.com
+    service: http://ha-mcp:8000
+  - hostname: nfl.yourdomain.com
+    service: http://flaim-mcp:8800
+  # citibike-mcp (reserved): add `- hostname: bike.yourdomain.com` -> service once the
+  # citibike-lookup repo ships a runnable image.
   - service: http_status:404

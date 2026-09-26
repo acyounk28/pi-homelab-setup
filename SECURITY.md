@@ -14,7 +14,7 @@ This setup exposes an internet-reachable MCP service through Cloudflare Tunnel. 
 
 ### No inbound router ports
 
-Do not create router port-forwarding rules for SSH, 8000, or any container. `cloudflared` initiates an outbound tunnel connection; publish the application only on Pi loopback as the Compose file does. Keep router UPnP/automatic port mappings disabled if feasible and review router rules periodically.
+Do not create router port-forwarding rules for SSH, 8000-8002, or any container. `cloudflared` initiates an outbound tunnel connection; publish the application only on Pi loopback as the Compose file does. Keep router UPnP/automatic port mappings disabled if feasible and review router rules periodically.
 
 ### UFW firewall
 
@@ -29,7 +29,7 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-Do not add an allow rule for port 8000. If using Tailscale, configure its ACLs and narrowly allow SSH from the tailnet as appropriate for your setup.
+Do not add an allow rule for ports 8000, 8001, or 8002. If using Tailscale, configure its ACLs and narrowly allow SSH from the tailnet as appropriate for your setup.
 
 ### SSH with Ed25519 keys only
 
@@ -61,7 +61,7 @@ Do not close the verified session until a new key-based SSH login succeeds. Use 
 
 ## Container hardening
 
-The upstream `ha-device-mcp` Dockerfile creates `appuser` with UID 10001 and runs the application as that non-root user. The deployment Compose configuration adds `read_only: true`, `cap_drop: [ALL]`, and `no-new-privileges:true` for `ha-mcp`; it binds port 8000 only to host loopback. Do not add `privileged: true`, host networking, or extra capabilities. If a future application change genuinely requires a writable directory, mount only that specific directory as a bounded writable volume/tmpfs rather than disabling the read-only root filesystem.
+The upstream `ha-device-mcp` Dockerfile creates `appuser` with UID 10001 and `flaim/nfl-metrics` creates `nfl` with UID 10001; both run as that non-root user and Compose re-asserts `user: "10001:10001"`. The deployment Compose configuration adds `read_only: true`, `cap_drop: [ALL]`, and `no-new-privileges:true` for every application service (writable paths are limited to a `/tmp` tmpfs and, for `flaim-mcp`, the `/data` volume); it binds ports 8000/8001 only to host loopback. Do not add `privileged: true`, host networking, or extra capabilities. If a future application change genuinely requires a writable directory, mount only that specific directory as a bounded writable volume/tmpfs rather than disabling the read-only root filesystem.
 
 Validate and apply the hardened Compose configuration:
 
