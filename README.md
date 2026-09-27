@@ -4,6 +4,8 @@
 2. Copy `.env.example` to `.env`; add your `HA_LONG_LIVED_ACCESS_TOKEN` and Cloudflare/service credentials.
 3. Start the stack: `docker compose up -d --build`.
 
+Sibling repos (`ha-device-mcp`, `flaim`, `citibike-lookup`, `homeassistant-service`) are cloned or fast-forwarded with `scripts/pull-all.sh` (`-n` dry run, `-p ssh|https`, `-d <parent-dir>`; see `--help`).
+
 ## Home Assistant details
 
 - `scripts/install-homeassistant.sh` seeds `config/homeassistant/configuration.yaml` (from `homeassistant/configuration.yaml`) and stages HACS plus the custom components in `homeassistant/custom_components.txt` (Pura, Hatch, Oasis Smart Lights) before starting HA. Idempotent; flags `--no-start`, `--no-components`, `--force-components`.
