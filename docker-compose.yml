@@ -7,11 +7,17 @@ services:
       - ha-mcp
       - citibike-mcp
       - flaim
+    # Only needed if HA itself is published through the tunnel
+    # (origin http://host.docker.internal:8123, see docs/networking.md).
+    extra_hosts:
+      - host.docker.internal:host-gateway
     networks:
       - homelab
 
+  # Host network so mDNS/SSDP/HomeKit discovery works; UI on <pi-ip>:8123.
+  # Bootstrap (config + HACS + custom components): scripts/install-homeassistant.sh
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ${HA_IMAGE:-ghcr.io/home-assistant/home-assistant}:${HA_VERSION:-stable}
     container_name: homeassistant
     network_mode: host
     environment:
@@ -19,7 +25,14 @@ services:
     volumes:
       - ${HA_CONFIG_DIR:-./config/homeassistant}:/config
       - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/ | grep -Eq '^(200|30[0-9])$' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
 
   ha-mcp:
     build:
@@ -32,6 +45,9 @@ services:
       - host.docker.internal:host-gateway
     ports:
       - "8000:8000"
+    depends_on:
+      homeassistant:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - homelab

@@ -1,0 +1,43 @@
+# Baseline Home Assistant configuration. scripts/install.sh copies this to
+# config/homeassistant/configuration.yaml only if none exists, then substitutes
+# __TRUSTED_PROXIES__ from HA_TRUSTED_PROXIES in .env.
+#
+# Everything else (Pura, Oasis Smart Lights, Hatch, HomeKit Controller, Tuya) is
+# UI-configured; do not add YAML for them.
+
+default_config:
+
+homeassistant:
+  # Name/location/timezone come from onboarding (Settings -> System -> General).
+  # Drop extra YAML into config/homeassistant/packages/*.yaml instead of editing this file.
+  packages: !include_dir_named packages
+
+http:
+  # cloudflared runs on a Docker bridge network and reaches the host-networked
+  # HA through the host gateway (172.16.0.0/12 by default). Without this HA
+  # answers proxied requests with 400 Bad Request. Loopback is included so
+  # scripts on the Pi can also sit behind a local proxy.
+  use_x_forwarded_for: true
+  trusted_proxies:
+__TRUSTED_PROXIES__
+  # Repeated bad logins from one IP get banned. Behind cloudflared the "IP" is
+  # the real client only because X-Forwarded-For is trusted above.
+  ip_ban_enabled: true
+  login_attempts_threshold: 5
+
+logger:
+  default: warning
+  logs:
+    custom_components.pura: info
+    custom_components.oasis: info
+    custom_components.ha_hatch: info
+    homeassistant.components.homekit_controller: info
+
+recorder:
+  # Keep the SQLite DB small on the Pi's SD card / NVMe.
+  purge_keep_days: 14
+  commit_interval: 30
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
