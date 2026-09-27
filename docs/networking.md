@@ -67,7 +67,7 @@ The tunnel is **outbound only**: `cloudflared` opens a connection to Cloudflare'
 | Public hostname (Zero Trust → Networks → Tunnels → Public Hostname) | Origin | Notes |
 | --- | --- | --- |
 | `ha-mcp.<domain>` | `http://ha-mcp:8000` | bridge DNS works |
-| `flaim.<domain>` / `bike.<domain>` | `http://flaim:8790` / `http://citibike-mcp:8002` | unchanged |
+| `flaim.<domain>` / `bike.<domain>` | `http://flaim-mcp:8790` / `http://citibike-mcp:8002` | `flaim-mcp` is the container name and a network alias of the `flaim` service |
 | `ha.<domain>` *(optional, off by default)* | `http://host.docker.internal:8123` | **not** `http://homeassistant:8123` once HA is host-networked |
 
 ### Should HA itself be published through the tunnel?

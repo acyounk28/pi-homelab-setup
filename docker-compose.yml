@@ -66,9 +66,11 @@ services:
     networks:
       - homelab
 
+  # Cloudflare origin http://flaim-mcp:8790; both `flaim` and `flaim-mcp` resolve on the bridge.
   flaim:
     build:
       context: ../flaim
+    container_name: flaim-mcp
     env_file: .env
     environment:
       FLAIM_MCP_HOST: 0.0.0.0
@@ -77,7 +79,9 @@ services:
       - "8790:8790"
     restart: unless-stopped
     networks:
-      - homelab
+      homelab:
+        aliases:
+          - flaim-mcp
 
 networks:
   homelab:
