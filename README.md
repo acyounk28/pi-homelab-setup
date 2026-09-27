@@ -1,6 +1,6 @@
 # Raspberry Pi Home Lab MCP services
 
-Deploy Home Assistant, Home Assistant `ha-device-mcp`, fantasy-sports `flaim-mcp`, and Citi Bike `citibike-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose the MCP services through a Cloudflare Tunnel. The included Home Assistant setup uses a Compose bridge network and persistent `./ha-config` storage.
+Deploy Home Assistant, Home Assistant `ha-device-mcp`, fantasy-sports `flaim-mcp`, and Citi Bike `citibike-mcp` on a Raspberry Pi (or another Docker host) with Compose, then expose the MCP services through a Cloudflare Tunnel. The included Home Assistant setup uses Linux host networking (for device discovery) and persistent `./config/homeassistant` storage.
 
 ## 1. Prepare the host
 
@@ -26,7 +26,7 @@ cd pi-homelab-setup
 
 ## 3. Start Home Assistant and complete first-run setup
 
-Create the private environment file and set `TZ` in `.env` to the appropriate IANA timezone. The example uses `HA_URL=http://homeassistant:8123`, the Compose service DNS name used by `ha-mcp` on the shared bridge network.
+Create the private environment file and set `TZ` in `.env` to the appropriate IANA timezone. The example uses `HA_URL=http://host.docker.internal:8123`: Home Assistant runs on the host network, and `ha-mcp` (on the Compose bridge network) reaches it through the Docker host gateway.
 
 ```sh
 cp .env.example .env
@@ -36,9 +36,9 @@ sudo docker compose up -d homeassistant
 sudo docker compose logs -f homeassistant
 ```
 
-Once startup completes, open `http://<pi-ip>:8123` from a browser on the same LAN (replace `<pi-ip>` with the Pi's actual address). Create the Home Assistant owner/admin account and complete the initial setup/location prompts. Configuration persists under `./ha-config`. The host can also open `http://localhost:8123`.
+Once startup completes, open `http://<pi-ip>:8123` from a browser on the same LAN (replace `<pi-ip>` with the Pi's actual address). Create the Home Assistant owner/admin account and complete the initial setup/location prompts. Configuration persists under `./config/homeassistant` (override with `HA_CONFIG_DIR` in `.env`). The host can also open `http://localhost:8123`.
 
-Add devices in Home Assistant at Settings -> Devices & services -> Add integration. Use a compatible integration for each exact model (native integrations, HomeKit, Tuya/Local Tuya, SmartThings, or an appropriate custom component may apply). After integration setup, use Developer Tools -> States to copy exact entity IDs. Create a Home Assistant Long-Lived Access Token from your profile -> Security -> Long-Lived Access Tokens and put it in `.env` as `HA_LONG_LIVED_ACCESS_TOKEN`. This single HA token is the bridge for HA-controlled devices; do not enter separate device hardware tokens for this stack unless a particular HA integration requires provider authentication.
+Add devices in Home Assistant at Settings -> Devices & services -> Add integration. Use a compatible integration for each exact model (native integrations, HomeKit, Tuya/Local Tuya, SmartThings, or an appropriate custom component may apply). After integration setup, use Developer Tools -> States to copy exact entity IDs, or list them from the Pi with `scripts/get-ha-entities.sh <token>` (see below). Create a Home Assistant Long-Lived Access Token from your profile -> Security -> Long-Lived Access Tokens and put it in `.env` as `HA_LONG_LIVED_ACCESS_TOKEN`. This single HA token is the bridge for HA-controlled devices; do not enter separate device hardware tokens for this stack unless a particular HA integration requires provider authentication.
 
 Windmill may appear through a compatible HomeKit/Tuya route or smart plug, as an entity such as `fan.windmill_ac`; smart plugs generally only provide power control. The current `ha-device-mcp` does not support Windmill controls and consumes neither `WINDMILL_ENTITY_ID` nor `WINDMILL_FAN_ENTITY_ID`. It currently supports Pura, Oasis, and Hatch roles (optional entity settings are documented in `.env.example`); Pura may expose `light.*`/`select.*`, Oasis `light.*`, and Hatch `light.*`, `media_player.*`, optional `switch.*` and favorite `scene.*`. HA exposing an entity does not automatically make it controllable through this MCP application. See `ENV_GUIDE.md` for beginner-oriented details.
 
@@ -46,27 +46,32 @@ Windmill may appear through a compatible HomeKit/Tuya route or smart plug, as an
 
 ### Container image and Compose service
 
-`homeassistant/home-assistant:stable` is a multi-arch image that publishes `linux/arm64` (and `amd64`), so the Raspberry Pi 5 / Pi 4 running 64-bit Raspberry Pi OS pulls the ARM64 variant automatically; no `platform:` override or Pi-specific tag is needed. (`ghcr.io/home-assistant/home-assistant:stable` is the same image on GitHub's registry and can be substituted if Docker Hub pulls are rate-limited.) The checked-in service in `docker-compose.yml` is:
+`ghcr.io/home-assistant/home-assistant:stable` is a multi-arch image that publishes `linux/arm64` (and `amd64`), so the Raspberry Pi 5 / Pi 4 running 64-bit Raspberry Pi OS pulls the ARM64 variant automatically; no `platform:` override or Pi-specific tag is needed. (`homeassistant/home-assistant:stable` on Docker Hub is the same image.) The checked-in service in `docker-compose.yml` is:
 
 ```yaml
 services:
   homeassistant:
-    image: homeassistant/home-assistant:stable
+    image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant
+    network_mode: host                                   # discovery (mDNS/SSDP/HomeKit/Matter); UI on <pi-ip>:8123
     environment:
-      TZ: ${TZ:-America/New_York}   # IANA timezone, from .env
+      TZ: ${TZ:-America/New_York}                        # IANA timezone, from .env
     volumes:
-      - ./ha-config:/config         # all HA state: configuration.yaml, .storage, database
-    ports:
-      - "8123:8123"                 # LAN access to the HA UI
+      - ${HA_CONFIG_DIR:-./config/homeassistant}:/config # all HA state: configuration.yaml, .storage, database
+      - /etc/localtime:/etc/localtime:ro                 # host clock/timezone
     restart: unless-stopped
-    networks:
-      - homelab                     # ha-mcp reaches it as http://homeassistant:8123
+
+  ha-mcp:
+    # ...
+    environment:
+      HA_URL: ${HA_URL:-http://host.docker.internal:8123}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"              # bridge container -> host-network HA
 ```
 
 - `TZ` drives automation schedules and log timestamps; `.env.example` sets `TZ=America/New_York`. Change it there, not in the Compose file.
-- `./ha-config` is created on first start and owned by the container's `root` user. Back it up (it contains the HA auth database and integration credentials) and never commit it; it is git-ignored.
-- Home Assistant is the only service in this stack that is reachable from the LAN (`0.0.0.0:8123`); the MCP services bind to `127.0.0.1` only.
+- `./config/homeassistant` (or `HA_CONFIG_DIR`, e.g. `/home/alex/homeassistant/config`) is created on first start and owned by the container's `root` user. Back it up (it contains the HA auth database and integration credentials) and never commit it; it is git-ignored.
+- With host networking Home Assistant listens on every host interface (`0.0.0.0:8123`), so it is reachable from the LAN; the MCP services bind to `127.0.0.1` only.
 
 To (re)start just Home Assistant and follow its startup:
 
@@ -78,35 +83,26 @@ sudo docker compose logs -f homeassistant
 
 First start on a Pi takes a few minutes while HA builds its database; wait for `Home Assistant initialized` in the logs. Upgrades are `docker compose pull homeassistant && docker compose up -d homeassistant`; the config volume is preserved.
 
-### Bridge networking (default) vs host networking
+### Host networking (default) vs bridge networking
 
-The checked-in configuration uses a standard bridge network: HA maps host port `8123` to container port `8123`, persists `./ha-config:/config`, and `ha-mcp` connects to `http://homeassistant:8123`. This is straightforward and works for normal API traffic and cloud-based integrations.
+The checked-in configuration uses `network_mode: host`, the standard for Home Assistant in Docker on Linux: discovery protocols (mDNS/Zeroconf, SSDP, HomeKit Controller, Matter, Thread) need HA to share the host's network stack. `ha-mcp` stays on the Compose bridge network and reaches HA at `http://host.docker.internal:8123` via `extra_hosts: host.docker.internal:host-gateway`. For Bluetooth integrations also mount `/run/dbus:/run/dbus:ro` into the `homeassistant` service.
 
-Some discovery protocols (mDNS/Zeroconf, SSDP, HomeKit Controller, Matter, Thread, some Bluetooth setups) only work when Home Assistant shares the host's network stack. To switch to host networking on Linux:
+If you would rather isolate HA on the bridge network (no local discovery, but only port 8123 is exposed), replace `network_mode: host` with:
 
 ```yaml
   homeassistant:
-    image: homeassistant/home-assistant:stable
-    container_name: homeassistant
-    network_mode: host            # replaces `ports:` and `networks:`
-    environment:
-      TZ: ${TZ:-America/New_York}
-    volumes:
-      - ./ha-config:/config
-      - /run/dbus:/run/dbus:ro    # only needed for Bluetooth integrations
-    restart: unless-stopped
-
-  ha-mcp:
-    # ...existing settings...
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # ...
+    ports:
+      - "8123:8123"
+    networks:
+      - homelab
 ```
 
-and set `HA_URL=http://host.docker.internal:8123` in `.env` so `ha-mcp` (still on the bridge network) can reach HA through the host. Use exactly one mode; do not keep `ports:`/`networks:` together with `network_mode: host`. Host networking removes network isolation for HA and exposes any port HA opens on every host interface, so prefer bridge mode unless a required integration needs discovery.
+and set `HA_URL=http://homeassistant:8123` in `.env` (the `extra_hosts` entry on `ha-mcp` is then unused but harmless). Use exactly one mode; do not keep `ports:`/`networks:` together with `network_mode: host`.
 
 ### Onboarding
 
-Open `http://<pi-ip>:8123` from a browser on the same LAN (find the Pi's address with `hostname -I`; the Pi itself can use `http://localhost:8123`). Create the owner/admin account, set the home name/location/unit system/timezone (it should match `TZ`), and skip or accept the auto-discovered devices. Everything is written to `./ha-config`. HA is bound to the LAN interface, so do not forward router port 8123 to the Pi; see the tunnel notes below for remote access.
+Open `http://<pi-ip>:8123` from a browser on the same LAN (find the Pi's address with `hostname -I`; the Pi itself can use `http://localhost:8123`). Create the owner/admin account, set the home name/location/unit system/timezone (it should match `TZ`), and skip or accept the auto-discovered devices. Everything is written to `./config/homeassistant`. HA is bound to the LAN interface, so do not forward router port 8123 to the Pi; see the tunnel notes below for remote access.
 
 ### Create a Long-Lived Access Token for `ha-device-mcp`
 
@@ -118,7 +114,7 @@ Open `http://<pi-ip>:8123` from a browser on the same LAN (find the Pi's address
 4. Put it in `.env`:
 
    ```sh
-   HA_URL=http://homeassistant:8123
+   HA_URL=http://host.docker.internal:8123
    HA_LONG_LIVED_ACCESS_TOKEN=<paste-token>
    ```
 
@@ -132,15 +128,33 @@ Open `http://<pi-ip>:8123` from a browser on the same LAN (find the Pi's address
 
 LLATs are valid for 10 years; revoke and rotate them from the same Security tab if `.env` is ever exposed. Only this one HA token is needed for HA-controlled devices (Pura, Oasis, Hatch); do not add per-device vendor tokens to `.env`.
 
+### List entity IDs from the CLI
+
+`scripts/get-ha-entities.sh` calls `GET /api/states` with the token and prints entity IDs grouped by domain (`climate`, `fan`, `light`, `switch`, `sensor` by default) with their current state and friendly name, ready to paste into `.env`:
+
+```sh
+# token as argument, HA on this machine (default URL http://localhost:8123)
+scripts/get-ha-entities.sh <long-lived-access-token>
+
+# explicit URL, or token from the environment / .env
+scripts/get-ha-entities.sh <token> http://192.168.1.50:8123
+set -a; . ./.env; set +a; scripts/get-ha-entities.sh http://localhost:8123
+
+# other domains
+scripts/get-ha-entities.sh -d light,media_player,scene <token>
+```
+
+It needs `curl` plus `jq` (or `python3`), exits non-zero with a plain message on a missing token, unreachable URL, or 401/403, and never prints the token (it is passed to curl through a private config file, not the command line). Copy the exact IDs into the `*_ENTITY_ID` variables documented in `.env.example`.
+
 ### Cloudflare Tunnel and Home Assistant
 
 The included tunnel exposes only the three MCP services. **Recommended: keep the Home Assistant UI LAN-only** and reach it remotely through a VPN (Tailscale/WireGuard) or the official Home Assistant Companion app on the same network. `ha-mcp` talks to HA over the internal Compose network, so remote MCP clients (Poke, Claude, ChatGPT) never need HA itself to be public.
 
 If you do decide to publish HA through the tunnel:
 
-- Add a public hostname `ha.yourdomain.com -> http://homeassistant:8123` in Zero Trust (or an `ingress` entry in `cloudflared/config.yml` for a local-managed tunnel). Cloudflare proxies WebSockets, which the HA frontend requires.
+- Add a public hostname `ha.yourdomain.com -> http://host.docker.internal:8123` in Zero Trust (or an `ingress` entry in `cloudflared/config.yml` for a local-managed tunnel) and give the `cloudflared` service the same `extra_hosts: ["host.docker.internal:host-gateway"]` entry as `ha-mcp`, since HA is on the host network rather than the Compose bridge. Cloudflare proxies WebSockets, which the HA frontend requires.
 - Put a Cloudflare Access policy (email/one-time PIN or identity provider) in front of that hostname. Note that the Companion app and many HA integrations do not handle the Access login page; if you need them remotely, prefer a VPN.
-- Tell HA it sits behind a reverse proxy, otherwise it rejects the proxied requests with `400 Bad Request`. Add to `./ha-config/configuration.yaml` and restart HA:
+- Tell HA it sits behind a reverse proxy, otherwise it rejects the proxied requests with `400 Bad Request`. Add to `./config/homeassistant/configuration.yaml` and restart HA:
 
   ```yaml
   http:
@@ -195,6 +209,6 @@ curl -s http://127.0.0.1:8002/readyz   # citibike: station count once feeds load
 
 ## Security and troubleshooting
 
-Keep unique strong tokens, restrict Home Assistant account permissions, keep secrets out of Git, and do not configure public router port forwarding. HA data is persisted in `./ha-config`; back it up securely. Check Compose status/logs, HA startup, exact entity IDs, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
+Keep unique strong tokens, restrict Home Assistant account permissions, keep secrets out of Git, and do not configure public router port forwarding. HA data is persisted in `./config/homeassistant` (`HA_CONFIG_DIR`); back it up securely. Check Compose status/logs, HA startup, exact entity IDs, sibling repository layout, and Cloudflare service/port routing when troubleshooting. Redact secrets before sharing logs.
 
 References: https://github.com/acyounk28/ha-device-mcp , https://github.com/acyounk28/flaim , https://github.com/acyounk28/citibike-lookup , https://docs.docker.com/engine/install/debian/ , https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ .
