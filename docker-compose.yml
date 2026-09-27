@@ -1,9 +1,12 @@
 services:
   # Home Assistant runs on the host network (Linux/Pi standard) so mDNS/SSDP/
-  # HomeKit/Matter discovery works; it listens on <pi-ip>:8123 directly. Other
-  # containers reach it via host.docker.internal:8123 (see ha-mcp extra_hosts).
+  # HomeKit/Matter discovery works; it listens on <pi-ip>:8123 directly and
+  # therefore has no `ports:`/`networks:` (Compose forbids them with host mode).
+  # Other containers reach it via host.docker.internal:8123 (extra_hosts below).
+  # Bootstrap config + HACS + custom components: scripts/install-homeassistant.sh;
+  # networking rationale: docs/networking.md.
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ${HA_IMAGE:-ghcr.io/home-assistant/home-assistant}:${HA_VERSION:-stable}
     container_name: homeassistant
     network_mode: host
     environment:
@@ -11,7 +14,15 @@ services:
     volumes:
       - ${HA_CONFIG_DIR:-./config/homeassistant}:/config
       - /etc/localtime:/etc/localtime:ro
+      # Bluetooth integrations (optional; harmless when bluez is not installed).
+      - /run/dbus:/run/dbus:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/ | grep -Eq '^(200|30[0-9])$' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
 
   ha-mcp:
     build:
@@ -26,6 +37,9 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     user: "10001:10001"
+    depends_on:
+      homeassistant:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
@@ -141,6 +155,10 @@ services:
         condition: service_started
       citibike-mcp:
         condition: service_healthy
+    # Only used if you publish HA itself through the tunnel (origin
+    # http://host.docker.internal:8123, see docs/networking.md); harmless otherwise.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

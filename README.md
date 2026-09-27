@@ -32,15 +32,24 @@ Create the private environment file and set `TZ` in `.env` to the appropriate IA
 cp .env.example .env
 nano .env
 chmod 600 .env
-sudo docker compose up -d homeassistant
+scripts/install-homeassistant.sh        # seeds config/homeassistant, stages HACS + Pura/Hatch/Oasis components, starts HA
 sudo docker compose logs -f homeassistant
 ```
 
+`scripts/install-homeassistant.sh` is idempotent (`--no-start`, `--no-components`, `--force-components`): it writes `configuration.yaml` from `homeassistant/configuration.yaml` (trusted proxies for the tunnel, recorder retention, `packages/` include) only if none exists, then runs `scripts/stage_components.sh` to download HACS and the custom components listed in `homeassistant/custom_components.txt` into `config/homeassistant/custom_components/`. Plain `sudo docker compose up -d homeassistant` also works if you prefer to add components through HACS later.
+
 Once startup completes, open `http://<pi-ip>:8123` from a browser on the same LAN (replace `<pi-ip>` with the Pi's actual address). Create the Home Assistant owner/admin account and complete the initial setup/location prompts. Configuration persists under `./config/homeassistant` (override with `HA_CONFIG_DIR` in `.env`). The host can also open `http://localhost:8123`.
 
-Add devices in Home Assistant at Settings -> Devices & services -> Add integration. Use a compatible integration for each exact model (native integrations, HomeKit, Tuya/Local Tuya, SmartThings, or an appropriate custom component may apply). After integration setup, use Developer Tools -> States to copy exact entity IDs, or list them from the Pi with `scripts/get-ha-entities.sh <token>` (see below). Create a Home Assistant Long-Lived Access Token from your profile -> Security -> Long-Lived Access Tokens and put it in `.env` as `HA_LONG_LIVED_ACCESS_TOKEN`. This single HA token is the bridge for HA-controlled devices; do not enter separate device hardware tokens for this stack unless a particular HA integration requires provider authentication.
+Add devices in Home Assistant at Settings -> Devices & services -> Add integration, following the per-device guides (prerequisites -> integration path -> exact clicks -> verification -> ha-device-mcp wiring -> troubleshooting) in [docs/devices/](docs/devices/README.md):
 
-Windmill may appear through a compatible HomeKit/Tuya route or smart plug, as an entity such as `fan.windmill_ac`; smart plugs generally only provide power control. The current `ha-device-mcp` does not support Windmill controls and consumes neither `WINDMILL_ENTITY_ID` nor `WINDMILL_FAN_ENTITY_ID`. It currently supports Pura, Oasis, and Hatch roles (optional entity settings are documented in `.env.example`); Pura may expose `light.*`/`select.*`, Oasis `light.*`, and Hatch `light.*`, `media_player.*`, optional `switch.*` and favorite `scene.*`. HA exposing an entity does not automatically make it controllable through this MCP application. See `ENV_GUIDE.md` for beginner-oriented details.
+1. [Pura 3 / 4](docs/devices/pura.md) — `pura` custom component (cloud, Pura account)
+2. [Hatch Rest / Restore](docs/devices/hatch.md) — `ha_hatch` custom component (cloud, Hatch account)
+3. [Oasis Lighting](docs/devices/oasis-lighting.md) (heyoasis.com, Mixtiles Ambient lamps / Bulbs) — community `oasis` cloud integration; **not** the Oasis Mini sand table. Read its caveats.
+4. [Windmill AC](docs/devices/windmill.md) — HomeKit Controller (local) preferred, Tuya / tuya-local or WindmillAC cloud as fallback; a template fan wraps the climate entity for the bridge.
+
+Then create the bridge token and entity IDs with the tooling in [docs/ha-device-mcp.md](docs/ha-device-mcp.md): `scripts/ha_token.py create --write-env .env` (Long-Lived Access Token for a dedicated non-admin HA user, or paste one from Profile -> Security) and `scripts/export_entities.py --merge-into .env` (writes the `*_ENTITY_ID` keys; `scripts/get-ha-entities.sh` remains as a plain entity lister). This single HA token is the bridge for all HA-controlled devices; vendor credentials are entered once in the HA UI and stay in `config/homeassistant/.storage`.
+
+ha-device-mcp roles: Pura `light.*_nightlight` / `select.*_fragrance` / `select.*_intensity` and Hatch `light.*_light` / `media_player.*` / `switch.*_power_switch` are auto-discovered when omitted; `OASIS_LIGHT_ENTITY_ID` must always be pinned (the bridge's own discovery targets the unrelated `oasis_mini` integration); `WINDMILL_FAN_ENTITY_ID` must be pinned and enables the fan tools. HA exposing an entity does not automatically make it controllable through the MCP application. See `ENV_GUIDE.md` for beginner-oriented details and [docs/networking.md](docs/networking.md) for why HA is host-networked.
 
 ## Home Assistant on Raspberry Pi (ARM64) in detail
 
@@ -51,7 +60,7 @@ Windmill may appear through a compatible HomeKit/Tuya route or smart plug, as an
 ```yaml
 services:
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ${HA_IMAGE:-ghcr.io/home-assistant/home-assistant}:${HA_VERSION:-stable}   # pin HA_VERSION in .env
     container_name: homeassistant
     network_mode: host                                   # discovery (mDNS/SSDP/HomeKit/Matter); UI on <pi-ip>:8123
     environment:
@@ -59,10 +68,17 @@ services:
     volumes:
       - ${HA_CONFIG_DIR:-./config/homeassistant}:/config # all HA state: configuration.yaml, .storage, database
       - /etc/localtime:/etc/localtime:ro                 # host clock/timezone
+      - /run/dbus:/run/dbus:ro                           # Bluetooth (optional)
     restart: unless-stopped
+    healthcheck:                                         # HTTP 200/30x on :8123; ha-mcp waits for this
+      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/ | grep -Eq '^(200|30[0-9])$' || exit 1"]
+      start_period: 120s
 
   ha-mcp:
     # ...
+    depends_on:
+      homeassistant:
+        condition: service_healthy
     environment:
       HA_URL: ${HA_URL:-http://host.docker.internal:8123}
     extra_hosts:
@@ -85,7 +101,7 @@ First start on a Pi takes a few minutes while HA builds its database; wait for `
 
 ### Host networking (default) vs bridge networking
 
-The checked-in configuration uses `network_mode: host`, the standard for Home Assistant in Docker on Linux: discovery protocols (mDNS/Zeroconf, SSDP, HomeKit Controller, Matter, Thread) need HA to share the host's network stack. `ha-mcp` stays on the Compose bridge network and reaches HA at `http://host.docker.internal:8123` via `extra_hosts: host.docker.internal:host-gateway`. For Bluetooth integrations also mount `/run/dbus:/run/dbus:ro` into the `homeassistant` service.
+The checked-in configuration uses `network_mode: host`, the standard for Home Assistant in Docker on Linux: discovery protocols (mDNS/Zeroconf, SSDP, HomeKit Controller, Matter, Thread) need HA to share the host's network stack. `ha-mcp` stays on the Compose bridge network and reaches HA at `http://host.docker.internal:8123` via `extra_hosts: host.docker.internal:host-gateway`. `/run/dbus` is mounted read-only for Bluetooth integrations (install `bluez` on the Pi to use them). Details and the port map: [docs/networking.md](docs/networking.md).
 
 If you would rather isolate HA on the bridge network (no local discovery, but only port 8123 is exposed), replace `network_mode: host` with:
 
@@ -152,9 +168,9 @@ The included tunnel exposes only the three MCP services. **Recommended: keep the
 
 If you do decide to publish HA through the tunnel:
 
-- Add a public hostname `ha.yourdomain.com -> http://host.docker.internal:8123` in Zero Trust (or an `ingress` entry in `cloudflared/config.yml` for a local-managed tunnel) and give the `cloudflared` service the same `extra_hosts: ["host.docker.internal:host-gateway"]` entry as `ha-mcp`, since HA is on the host network rather than the Compose bridge. Cloudflare proxies WebSockets, which the HA frontend requires.
+- Add a public hostname `ha.yourdomain.com -> http://host.docker.internal:8123` in Zero Trust (or an `ingress` entry in `cloudflared/config.yml` for a local-managed tunnel) (the `cloudflared` service already carries the same `extra_hosts: ["host.docker.internal:host-gateway"]` entry as `ha-mcp`, since HA is on the host network rather than the Compose bridge). Cloudflare proxies WebSockets, which the HA frontend requires.
 - Put a Cloudflare Access policy (email/one-time PIN or identity provider) in front of that hostname. Note that the Companion app and many HA integrations do not handle the Access login page; if you need them remotely, prefer a VPN.
-- Tell HA it sits behind a reverse proxy, otherwise it rejects the proxied requests with `400 Bad Request`. Add to `./config/homeassistant/configuration.yaml` and restart HA:
+- Tell HA it sits behind a reverse proxy, otherwise it rejects the proxied requests with `400 Bad Request`. `scripts/install-homeassistant.sh` writes this block (from `HA_TRUSTED_PROXIES`) into a fresh `configuration.yaml`; if you kept an existing one, add it to `./config/homeassistant/configuration.yaml` and restart HA:
 
   ```yaml
   http:
@@ -193,7 +209,7 @@ These service-name origins work when cloudflared shares the Compose network. Add
 
 ## 6. Start and verify the stack
 
-After Home Assistant first-run setup and environment configuration, run from this repository (with all three sibling repositories present):
+After Home Assistant first-run setup and environment configuration, run from this repository (with all three sibling repositories present). One `up -d` starts everything: `homeassistant` (host network, `:8123`), then `ha-mcp` (waits for HA's healthcheck), `flaim-mcp`, `citibike-mcp` and finally `cloudflared`. The MCP services publish only on `127.0.0.1:8000/8790/8002`, so nothing collides with HA's host-network ports (8123, plus mDNS 5353/udp and SSDP 1900/udp — do not run `avahi-daemon` or another host-mode mDNS responder on the Pi):
 
 ```sh
 sudo docker compose config

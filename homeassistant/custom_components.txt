@@ -1,0 +1,19 @@
+# Custom components pre-staged by scripts/install.sh (and scripts/stage_components.sh).
+# One per line:  <github owner/repo>  <domain (folder under custom_components/)>  [git ref]
+# Lines starting with # are ignored. HACS can adopt/upgrade these later.
+#
+# The domain column for pura / ha_hatch MUST match what ha-device-mcp
+# auto-discovers with integration_entities('<domain>').
+natekspencer/ha-pura            pura        latest
+dahlb/ha_hatch                  ha_hatch    latest
+# Oasis Lighting (heyoasis.com, Mixtiles: Oasis Ambient lamps + Oasis Bulbs).
+# Community cloud integration (ESP RainMaker API), NOT in the HACS default
+# list and not vendor-supported; read docs/devices/oasis-lighting.md first.
+# ha-device-mcp does not auto-discover this domain: pin OASIS_LIGHT_ENTITY_ID
+# with scripts/export_entities.py.
+# NOTE: natekspencer/ha-oasis-control (domain oasis_mini) is for the Oasis Mini
+# kinetic sand table, an unrelated product; do not add it for these lights.
+longweekendprojects/oasis-lights oasis      latest
+# Windmill AC (cloud, climate entity). Only needed if your unit is not on
+# HomeKit or Tuya; see docs/devices/windmill.md before enabling.
+# bzellman/WindmillAC             windmillac  latest

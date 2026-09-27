@@ -10,3 +10,9 @@ credentials.json
 # Home Assistant state (auth DB, integration credentials)
 config/homeassistant/
 ha-config/
+
+# Tooling output / caches (scripts/stage_components.sh, scripts/export_entities.py)
+.cache/
+__pycache__/
+ha-device-mcp.entities.env
+entities.json
