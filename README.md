@@ -205,6 +205,18 @@ curl -s http://127.0.0.1:8790/health   # flaim: providers + config warnings
 curl -s http://127.0.0.1:8002/readyz   # citibike: station count once feeds load
 ```
 
+### Start all services in order
+
+After configuring `.env` in this repository and completing Home Assistant onboarding, run `scripts/start-all.sh` from any directory instead of the manual `docker compose up` command above. Docker Compose, `curl`, and the sibling `ha-device-mcp`, `flaim`, and `citibike-lookup` checkouts are required. Use a Docker-enabled account, or run the script with `sudo` if Docker requires it.
+
+```sh
+scripts/start-all.sh
+```
+
+If a sibling `homeassistant-service` checkout has a `docker-compose.yml`, the script starts that standalone Home Assistant stack first, waits for its health check and for port 8123 to respond, then starts the other services from this repository's Compose file. If that sibling is absent, it starts this repository's `homeassistant` service first instead. It always omits this repository's `homeassistant` service when the standalone one is present: both declare the same container and port, but use different default configuration volumes. Do not switch between them without checking where your existing HA data lives. The other sibling repositories' standalone Compose stacks (including `flaim` and `ha-device-mcp`) are not started separately because this repository already runs their MCP services and would otherwise duplicate containers and port bindings.
+
+Compose reuses unchanged containers on repeated runs. The script waits up to five minutes for HA readiness and for the remaining services to start or become healthy, then prints `docker compose ps --all` status for each started stack. If startup fails, it exits nonzero and shows status; check the affected stack's logs with `docker compose logs --tail=100`. If HA already runs under the other Compose project, resolve the competing HA container and its configuration volume before running the script; it will not stop or replace that project for you.
+
 `docker compose config` may print secrets; keep its output private. Register the MCP endpoints at https://poke.com/integrations/new using `https://ha-mcp.yourdomain.com/mcp`, `https://flaim.yourdomain.com/mcp`, and `https://bike.yourdomain.com/mcp`, each with its matching bearer token. Verify using a harmless read-only operation.
 
 ## Security and troubleshooting
