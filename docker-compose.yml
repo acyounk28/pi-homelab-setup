@@ -1,10 +1,21 @@
 services:
-  # Home Assistant runs on the host network (Linux/Pi standard) so mDNS/SSDP/
-  # HomeKit/Matter discovery works; it listens on <pi-ip>:8123 directly and
-  # therefore has no `ports:`/`networks:` (Compose forbids them with host mode).
-  # Other containers reach it via host.docker.internal:8123 (extra_hosts below).
-  # Bootstrap config + HACS + custom components: scripts/install-homeassistant.sh;
-  # networking rationale: docs/networking.md.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
+    restart: unless-stopped
+    depends_on:
+      - ha-mcp
+      - citibike-mcp
+      - flaim
+    # Only needed if HA itself is published through the tunnel
+    # (origin http://host.docker.internal:8123, see docs/networking.md).
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - homelab
+
+  # Host network so mDNS/SSDP/HomeKit discovery works; UI on <pi-ip>:8123.
+  # Bootstrap (config + HACS + custom components): scripts/install-homeassistant.sh
   homeassistant:
     image: ${HA_IMAGE:-ghcr.io/home-assistant/home-assistant}:${HA_VERSION:-stable}
     container_name: homeassistant
@@ -14,7 +25,6 @@ services:
     volumes:
       - ${HA_CONFIG_DIR:-./config/homeassistant}:/config
       - /etc/localtime:/etc/localtime:ro
-      # Bluetooth integrations (optional; harmless when bluez is not installed).
       - /run/dbus:/run/dbus:ro
     restart: unless-stopped
     healthcheck:
@@ -27,141 +37,45 @@ services:
   ha-mcp:
     build:
       context: ../ha-device-mcp
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      # Home Assistant is on the host network, not the bridge.
       HA_URL: ${HA_URL:-http://host.docker.internal:8123}
+      HA_LONG_LIVED_ACCESS_TOKEN: ${HA_LONG_LIVED_ACCESS_TOKEN:?Set HA_LONG_LIVED_ACCESS_TOKEN in .env}
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - host.docker.internal:host-gateway
     ports:
-      - "127.0.0.1:8000:8000"
-    user: "10001:10001"
+      - "8000:8000"
     depends_on:
       homeassistant:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     networks:
       - homelab
 
-  # Flaim reads leagues and credentials straight from .env (ESPN_LEAGUE_IDS,
-  # SLEEPER_LEAGUE_IDS, SWID, ESPN_S2, FLAIM_MCP_TOKEN); no config/leagues.json
-  # is required or mounted. The container always listens on 8790 (the Cloudflare
-  # origin is http://flaim-mcp:8790) and serves Streamable HTTP/SSE at /mcp,
-  # health at /health.
-  flaim-mcp:
-    build:
-      context: ../flaim
-    image: flaim-mcp:local
-    container_name: flaim-mcp
-    env_file:
-      - .env
-    environment:
-      # Pinned so a stale FLAIM_MCP_PORT in .env cannot move the port away from
-      # the tunnel origin. FLAIM_MCP_AUTH_TOKEN is accepted as a legacy alias.
-      FLAIM_MCP_TOKEN: ${FLAIM_MCP_TOKEN:-${FLAIM_MCP_AUTH_TOKEN:?Set FLAIM_MCP_TOKEN in .env}}
-      FLAIM_MCP_HOST: 0.0.0.0
-      FLAIM_MCP_PORT: "8790"
-      PORT: "8790"
-    ports:
-      - "127.0.0.1:8790:8790"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8790/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    read_only: true
-    # Writable scratch for the player cache; the image runs as the unprivileged
-    # `node` user and falls back to in-memory caching if this is missing.
-    tmpfs:
-      - /data:mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - homelab
-
-  # Citi Bike GBFS lookup MCP (citibike-lookup/src/citibike_lookup/config.py).
-  # The container reads the same MCP_* variable names as ha-mcp, which the shared
-  # .env already assigns to ha-mcp, so this service does NOT load env_file; its
-  # values are mapped explicitly from CITIBIKE_* keys to keep the two tokens
-  # separate. Origin: http://citibike-mcp:8002/mcp, readiness /readyz (503 until
-  # the GBFS feeds are loaded).
   citibike-mcp:
     build:
       context: ../citibike-lookup
-    image: citibike-lookup:local
-    container_name: citibike-mcp
-    # Dockerfile runs as appuser (UID 10001); re-asserted here.
-    user: "10001:10001"
+    env_file: .env
     environment:
-      GBFS_URL: ${GBFS_URL:-https://gbfs.citibikenyc.com/gbfs/2.3/gbfs.json}
-      GBFS_LANGUAGE: ${GBFS_LANGUAGE:-en}
-      GBFS_TIMEOUT_SECONDS: ${GBFS_TIMEOUT_SECONDS:-10}
-      GBFS_STATUS_POLL_SECONDS: ${GBFS_STATUS_POLL_SECONDS:-60}
-      GBFS_INFORMATION_POLL_SECONDS: ${GBFS_INFORMATION_POLL_SECONDS:-3600}
-      GBFS_MAX_STALE_POLLS: ${GBFS_MAX_STALE_POLLS:-5}
-      # Pinned so the port always matches the tunnel origin http://citibike-mcp:8002.
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8002"
-      MCP_PATH: ${CITIBIKE_MCP_PATH:-/mcp}
-      # Prefer a dedicated CITIBIKE_MCP_TOKEN (CITIBIKE_MCP_AUTH_TOKEN is accepted as
-      # an alias); falls back to the ha-mcp token so an existing .env keeps working.
-      MCP_AUTH_TOKEN: ${CITIBIKE_MCP_TOKEN:-${CITIBIKE_MCP_AUTH_TOKEN:-${MCP_AUTH_TOKEN:?Set CITIBIKE_MCP_TOKEN in .env}}}
-      MCP_ALLOWED_HOSTS: ${CITIBIKE_MCP_ALLOWED_HOSTS:-}
-      LOG_LEVEL: ${CITIBIKE_LOG_LEVEL:-INFO}
+      MCP_AUTH_TOKEN: ${CITIBIKE_MCP_TOKEN:-${MCP_AUTH_TOKEN:?Set CITIBIKE_MCP_TOKEN or MCP_AUTH_TOKEN in .env}}
     ports:
-      - "127.0.0.1:8002:8002"
+      - "8002:8002"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/readyz', timeout=3).status==200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     networks:
       - homelab
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
+  flaim:
+    build:
+      context: ../flaim
+    env_file: .env
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
-    depends_on:
-      ha-mcp:
-        condition: service_healthy
-      flaim-mcp:
-        condition: service_started
-      citibike-mcp:
-        condition: service_healthy
-    # Only used if you publish HA itself through the tunnel (origin
-    # http://host.docker.internal:8123, see docs/networking.md); harmless otherwise.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      FLAIM_MCP_HOST: 0.0.0.0
+      FLAIM_MCP_PORT: "8790"
+    ports:
+      - "8790:8790"
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
     networks:
       - homelab
 
