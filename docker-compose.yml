@@ -1,22 +1,28 @@
 services:
+  # Home Assistant runs on the host network (Linux/Pi standard) so mDNS/SSDP/
+  # HomeKit/Matter discovery works; it listens on <pi-ip>:8123 directly. Other
+  # containers reach it via host.docker.internal:8123 (see ha-mcp extra_hosts).
   homeassistant:
-    image: homeassistant/home-assistant:stable
+    image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant
+    network_mode: host
     environment:
       TZ: ${TZ:-America/New_York}
     volumes:
-      - ./ha-config:/config
-    ports:
-      - "8123:8123"
+      - ${HA_CONFIG_DIR:-./config/homeassistant}:/config
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
-    networks:
-      - homelab
 
   ha-mcp:
     build:
       context: ../ha-device-mcp
     env_file:
       - .env
+    environment:
+      # Home Assistant is on the host network, not the bridge.
+      HA_URL: ${HA_URL:-http://host.docker.internal:8123}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8000:8000"
     user: "10001:10001"

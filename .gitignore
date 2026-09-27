@@ -8,4 +8,5 @@ credentials.json
 .DS_Store
 
 # Home Assistant state (auth DB, integration credentials)
+config/homeassistant/
 ha-config/
