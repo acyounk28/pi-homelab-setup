@@ -6,3 +6,6 @@
 cloudflared-credentials.json
 credentials.json
 .DS_Store
+
+# Home Assistant state (auth DB, integration credentials)
+ha-config/
